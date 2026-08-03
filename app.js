@@ -235,6 +235,28 @@ function resetAutoLogoutTimer() {
 });
 
 // ---------------------------------------------------------------------
+// AUTO-LOGOUT JAM TUTUP (KHUSUS KASIR) — antisipasi Kasir lupa logout
+// selepas apotek tutup. Owner tidak terdampak (mungkin masih perlu akses
+// malam hari untuk cek laporan/approval). Dihitung dalam zona waktu
+// Makassar (WITA) secara eksplisit, bukan zona waktu perangkat, supaya
+// tetap akurat meski jam HP salah setting.
+// ---------------------------------------------------------------------
+const JAM_TUTUP_AUTO_LOGOUT = 22; // 22:00 WITA
+function jamWITASekarang() {
+  const s = new Date().toLocaleString('en-US', { timeZone: 'Asia/Makassar', hour12: false, hour: '2-digit' });
+  return parseInt(s, 10);
+}
+function cekLogoutOtomatisJamTutup() {
+  if (!AppState.user || AppState.user.role === 'Owner') return;
+  if (jamWITASekarang() >= JAM_TUTUP_AUTO_LOGOUT) {
+    toast('Anda otomatis dikeluarkan karena sudah lewat jam tutup (22:00 WITA).', 'warn');
+    logout();
+  }
+}
+setInterval(cekLogoutOtomatisJamTutup, 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) cekLogoutOtomatisJamTutup(); });
+
+// ---------------------------------------------------------------------
 // AUTENTIKASI
 // ---------------------------------------------------------------------
 function simpanSesi(user) {
@@ -2027,6 +2049,7 @@ async function masukKeAplikasi(user) {
     brandEl.addEventListener('click', () => navigasiKe('dashboard'));
   }
   resetAutoLogoutTimer();
+  cekLogoutOtomatisJamTutup();
   renderBottomNav();
   navigasiKe('dashboard', true);
 }
