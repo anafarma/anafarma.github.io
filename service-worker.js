@@ -6,7 +6,7 @@
  * tidak pernah melihat stok/harga basi. Naikkan CACHE_VERSION setiap kali
  * index.html/app.js diperbarui supaya HP pengguna otomatis mengambil versi baru.
  */
-const CACHE_VERSION = 'ana-farma-v13';
+const CACHE_VERSION = 'ana-farma-v14';
 const APP_SHELL = [
   './index.html',
   './app.js',
