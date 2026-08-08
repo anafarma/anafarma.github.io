@@ -2140,3 +2140,393 @@ async function initAplikasi() {
 }
 
 document.addEventListener('DOMContentLoaded', initAplikasi);
+
+// =====================================================================
+// INTEGRASI FITUR app1.js — TAMBAHAN TANPA MENGUBAH STRUKTUR app.js
+// ---------------------------------------------------------------------
+// Fitur yang dibawa masuk:
+// 1) Multi-satuan penjualan (jika backend mengirim satuanJual)
+// 2) Lokasi rak + opname berdasarkan zona/lokasi (32 lokasi)
+// Semua router, API layer, modal, state, dan renderer utama app.js
+// tetap dipakai. Blok ini hanya menambahkan/menimpa handler POS & Opname
+// agar kompatibel dengan fitur dari app1.js.
+// =====================================================================
+
+AppState.lokasiData = AppState.lokasiData || [];
+AppState.selectedZona = AppState.selectedZona || null;
+AppState.selectedOpname = AppState.selectedOpname || null;
+
+function satuanJualProdukIntegrasi(produk) {
+  if (Array.isArray(produk && produk.satuanJual) && produk.satuanJual.length) {
+    return produk.satuanJual.map(s => ({
+      satuan: s.satuan,
+      hargaJual: Number(s.hargaJual) || 0,
+      isi: Number(s.isi || s.isiPerSatuan || 1) || 1
+    }));
+  }
+
+  const satuan = produk && (produk.Satuan || 'Pcs');
+  const harga = Number(produk && produk.Harga_Jual) || 0;
+  return [{ satuan: satuan, hargaJual: harga, isi: 1 }];
+}
+
+function tambahKeKeranjang(produk, satuanPilihan) {
+  const blokir = cekBolehTransaksi();
+  if (blokir) { toast(blokir, 'warn'); return; }
+
+  const pilihan = satuanJualProdukIntegrasi(produk);
+  const satuan = satuanPilihan || pilihan[0].satuan;
+  const pricing = pilihan.find(x => x.satuan === satuan) || pilihan[0];
+  const isi = Number(pricing.isi) || 1;
+  const stokTersedia = Number(produk.Stok) || 0;
+  const stokDalamSatuan = Math.floor(stokTersedia / isi);
+
+  const existing = AppState.cart.find(x =>
+    x.kodeObat === produk.Kode_Obat && x.satuan === pricing.satuan
+  );
+
+  if (existing) {
+    if ((existing.qty + 1) * isi > stokTersedia) {
+      toast('Stok tidak cukup.', 'warn');
+      return;
+    }
+    existing.qty += 1;
+  } else {
+    if (stokDalamSatuan <= 0) {
+      toast('Stok tidak cukup untuk satuan ' + pricing.satuan + '.', 'warn');
+      return;
+    }
+    AppState.cart.push({
+      kodeObat: produk.Kode_Obat,
+      namaObat: produk.Nama_Obat,
+      satuan: pricing.satuan,
+      hargaSatuan: pricing.hargaJual,
+      qty: 1,
+      stokTersedia: stokTersedia,
+      isiPerSatuan: isi
+    });
+  }
+
+  renderCartFab();
+  const searchEl = document.getElementById('kasir-search');
+  renderKasirList(AppState.produkCache, searchEl ? searchEl.value : '');
+}
+
+function ubahQtyKeranjang(kodeObat, delta, satuan) {
+  const item = AppState.cart.find(x =>
+    x.kodeObat === kodeObat && (!satuan || x.satuan === satuan)
+  );
+  if (!item) return;
+
+  const isi = Number(item.isiPerSatuan) || 1;
+  item.qty += delta;
+
+  if (item.qty <= 0) {
+    AppState.cart = AppState.cart.filter(x => x !== item);
+  } else if (item.qty * isi > Number(item.stokTersedia || 0)) {
+    item.qty = Math.floor(Number(item.stokTersedia || 0) / isi);
+    if (item.qty <= 0) {
+      AppState.cart = AppState.cart.filter(x => x !== item);
+    } else {
+      toast('Stok maksimal ' + item.qty + ' ' + item.satuan, 'warn');
+    }
+  }
+
+  renderCartFab();
+  const modal = document.getElementById('modal-root');
+  if (modal && modal.querySelector('.modal-overlay.show')) renderKeranjangModalBody();
+  const searchEl = document.getElementById('kasir-search');
+  if (document.getElementById('kasir-list')) {
+    renderKasirList(AppState.produkCache, searchEl ? searchEl.value : '');
+  }
+}
+
+function totalKeranjang() {
+  return AppState.cart.reduce((s, x) => s + x.qty * Number(x.hargaSatuan || 0), 0);
+}
+
+function jumlahItemKeranjang() {
+  return AppState.cart.reduce((s, x) => s + x.qty, 0);
+}
+
+function renderKasirList(produkList, query) {
+  const listEl = document.getElementById('kasir-list');
+  if (!listEl) return;
+
+  const q = (query || '').toLowerCase().trim();
+  const filtered = q
+    ? produkList.filter(p => String(p.Nama_Obat || '').toLowerCase().includes(q))
+    : produkList.slice(0, 60);
+
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div>Produk tidak ditemukan.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = filtered.slice(0, 100).map(p => {
+    const satuan = satuanJualProdukIntegrasi(p);
+    const tombolSatuan = satuan.map(s => {
+      const item = AppState.cart.find(x => x.kodeObat === p.Kode_Obat && x.satuan === s.satuan);
+      const isi = Number(s.isi) || 1;
+      const stokUnit = Math.floor((Number(p.Stok) || 0) / isi);
+      const disabled = stokUnit <= 0 ? 'disabled' : '';
+      return `<button class="btn btn-primary btn-sm" data-add-kode="${escapeHtml(p.Kode_Obat)}" data-add-satuan="${escapeHtml(s.satuan)}" ${disabled}>
+        + ${escapeHtml(s.satuan)} ${formatRupiah(s.hargaJual)}
+        ${item ? ' (' + item.qty + ')' : ''}
+      </button>`;
+    }).join(' ');
+
+    return `
+      <div class="list-item">
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
+          <div class="li-sub">Stok: ${p.Stok} ${escapeHtml(p.Satuan || '')}</div>
+        </div>
+        <div class="li-right" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;">
+          ${tombolSatuan}
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('[data-add-kode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = produkList.find(x => x.Kode_Obat === btn.dataset.addKode);
+      if (p) tambahKeKeranjang(p, btn.dataset.addSatuan);
+    });
+  });
+}
+
+function renderKeranjangModalBody() {
+  const body = document.querySelector('#modal-root .modal-body');
+  if (!body) return;
+
+  if (!AppState.cart.length) {
+    body.innerHTML = `<div class="empty-state"><div class="empty-icon">🛒</div>Keranjang kosong.</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div id="cart-items">
+      ${AppState.cart.map(it => `
+        <div class="list-item">
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(it.namaObat)}</div>
+            <div class="li-sub">${escapeHtml(it.satuan || '')} • ${formatRupiah(it.hargaSatuan)} x ${it.qty} = ${formatRupiah(it.qty * it.hargaSatuan)}</div>
+          </div>
+          <div class="qty-stepper">
+            <button data-qty-minus="${escapeHtml(it.kodeObat)}" data-qty-satuan="${escapeHtml(it.satuan || '')}">−</button>
+            <span>${it.qty}</span>
+            <button data-qty-plus="${escapeHtml(it.kodeObat)}" data-qty-satuan="${escapeHtml(it.satuan || '')}">+</button>
+          </div>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;font-weight:800;font-size:16px;margin:14px 0;">
+      <span>Total</span><span>${formatRupiah(totalKeranjang())}</span>
+    </div>
+    <button class="btn btn-primary" id="btn-lanjut-bayar">Lanjut ke Pembayaran</button>`;
+
+  body.querySelectorAll('[data-qty-plus]').forEach(b =>
+    b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyPlus, 1, b.dataset.qtySatuan))
+  );
+  body.querySelectorAll('[data-qty-minus]').forEach(b =>
+    b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyMinus, -1, b.dataset.qtySatuan))
+  );
+  body.querySelector('#btn-lanjut-bayar').addEventListener('click', bukaCheckoutModal);
+}
+
+async function loadLokasiIntegrasi() {
+  const data = await apiGet('getLokasi', { idUser: AppState.user ? AppState.user.idUser : null });
+  AppState.lokasiData = Array.isArray(data) ? data : [];
+  return AppState.lokasiData;
+}
+
+async function bukaOpnameLokasiModal(zona) {
+  try {
+    AppState.selectedZona = zona;
+    const result = await apiPost('createStockOpnameSession', withIdUser({
+      zona: zona,
+      keterangan: 'Opname ' + zona
+    }));
+
+    AppState.selectedOpname = result && (result.idOpname || result.ID_Opname);
+    if (!AppState.selectedOpname) throw new Error('Server tidak mengembalikan ID opname.');
+
+    const lokasi = AppState.lokasiData.filter(x => x.Zona === zona);
+    const produk = AppState.produkCache.length ? AppState.produkCache : await ambilProduk(true);
+
+    bukaModal({
+      title: 'Opname — ' + zona,
+      bodyHtml: `
+        <div id="opname-lokasi-detail">
+          ${lokasi.map(l => {
+            const produkInLokasi = produk.filter(p => p.Lokasi_Rak_ID === l.ID_Lokasi);
+            return `<div class="card" style="margin-bottom:10px;">
+              <div style="font-weight:800;">${escapeHtml(l.Nama_Display || l.ID_Lokasi)}</div>
+              <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px;">${escapeHtml(l.ID_Lokasi)}</div>
+              ${produkInLokasi.length ? produkInLokasi.map(p => `
+                <div class="list-item">
+                  <div class="li-main">
+                    <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
+                    <div class="li-sub">Stok sistem: ${p.Stok} ${escapeHtml(p.Satuan || '')}</div>
+                  </div>
+                  <input type="number" class="opname-lokasi-input" data-kode="${escapeHtml(p.Kode_Obat)}" data-lokasi="${escapeHtml(l.ID_Lokasi)}"
+                    min="0" placeholder="Fisik" style="width:85px;padding:8px;border:1.5px solid var(--border);border-radius:8px;text-align:center;">
+                </div>`).join('') : `<div class="empty-state" style="padding:10px;">Lokasi kosong.</div>`}
+            </div>`;
+          }).join('')}
+        </div>
+        <button class="btn btn-primary" id="btn-simpan-opname-lokasi">Simpan Hasil Opname</button>`,
+      onMount: root => {
+        root.querySelector('#btn-simpan-opname-lokasi').addEventListener('click', async () => {
+          const details = Array.from(root.querySelectorAll('.opname-lokasi-input'))
+            .filter(i => i.value !== '')
+            .map(i => ({
+              lokasiId: i.dataset.lokasi,
+              kodeObat: i.dataset.kode,
+              stokManual: Number(i.value),
+              catatan: ''
+            }));
+
+          if (!details.length) {
+            toast('Tidak ada data untuk disimpan.', 'warn');
+            return;
+          }
+
+          const btn = root.querySelector('#btn-simpan-opname-lokasi');
+          btn.disabled = true;
+          btn.textContent = 'Menyimpan...';
+          try {
+            await apiPost('saveStockOpnameDetail', withIdUser({
+              idOpname: AppState.selectedOpname,
+              details: details
+            }));
+            toast('Opname lokasi berhasil disimpan.', 'success');
+            tutupModal();
+            invalidasiCacheProduk();
+            renderScreen('opname');
+          } catch (err) {
+            tampilkanError(err);
+            btn.disabled = false;
+            btn.textContent = 'Simpan Hasil Opname';
+          }
+        });
+      }
+    });
+  } catch (err) {
+    tampilkanError(err);
+  }
+}
+
+async function renderOpnameLokasiTerintegrasi(root) {
+  const blokir = cekBolehTransaksi();
+  if (!AppState.lokasiData.length) await loadLokasiIntegrasi();
+
+  const zonaMap = {};
+  AppState.lokasiData.forEach(l => {
+    const zona = l.Zona || 'LAINNYA';
+    if (!zonaMap[zona]) zonaMap[zona] = [];
+    zonaMap[zona].push(l);
+  });
+
+  root.innerHTML = `
+    <div class="container">
+      ${blokir ? `<div class="login-error show" style="margin-bottom:10px;">${escapeHtml(blokir)}</div>` : ''}
+      <div class="card" style="margin-bottom:12px;">
+        <b>Stok Opname berdasarkan Lokasi Rak</b>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px;">
+          Pilih zona untuk menampilkan seluruh lokasi rak yang tersedia.
+        </p>
+      </div>
+      <div class="grid-2">
+        ${Object.keys(zonaMap).map(zona => `
+          <button class="btn btn-outline" data-zona-opname="${escapeHtml(zona)}" ${blokir ? 'disabled' : ''}>
+            📍 ${escapeHtml(zona)}<br><small>${zonaMap[zona].length} lokasi</small>
+          </button>`).join('')}
+      </div>
+    </div>`;
+
+  root.querySelectorAll('[data-zona-opname]').forEach(btn => {
+    btn.addEventListener('click', () => bukaOpnameLokasiModal(btn.dataset.zonaOpname));
+  });
+}
+
+// Aktifkan tampilan opname berbasis lokasi dari app1.js.
+// Router dan SCREEN_RENDERERS milik app.js tetap digunakan.
+SCREEN_RENDERERS.opname = renderOpnameLokasiTerintegrasi;
+
+// Tambahkan pemuatan lokasi saat aplikasi sudah memiliki sesi.
+const _masukKeAplikasiSebelumIntegrasi = masukKeAplikasi;
+async function masukKeAplikasiDenganLokasi(user) {
+  await _masukKeAplikasiSebelumIntegrasi(user);
+  try { await loadLokasiIntegrasi(); } catch (e) { console.warn('Lokasi belum dapat dimuat:', e); }
+}
+masukKeAplikasi = masukKeAplikasiDenganLokasi;
+
+// Pastikan checkout membawa satuan seperti pada app1.js.
+const _bukaCheckoutModalSebelumIntegrasi = bukaCheckoutModal;
+async function bukaCheckoutModalDenganSatuan() {
+  if (!AppState.cart.some(x => x.satuan)) return _bukaCheckoutModalSebelumIntegrasi();
+  let pelangganOptions = '<option value="">-- Tanpa Pelanggan --</option>';
+  try {
+    const pelanggan = await apiGet('getPelanggan', { idUser: AppState.user ? AppState.user.idUser : null });
+    pelangganOptions += pelanggan.map(p => `<option value="${p.ID_Pelanggan}">${escapeHtml(p.Nama)} (${p.Poin || 0} poin)</option>`).join('');
+  } catch (e) {}
+
+  const total = totalKeranjang();
+  bukaModal({
+    title: 'Pembayaran',
+    bodyHtml: `
+      <div class="form-group"><label>Pelanggan (opsional)</label><select id="chk-pelanggan">${pelangganOptions}</select></div>
+      <div class="form-group"><label>Diskon (Rp)</label><input type="number" id="chk-diskon" value="0" inputmode="numeric"></div>
+      <div class="form-group"><label>Metode Pembayaran</label><select id="chk-metode"><option>Tunai</option><option>QRIS</option><option>E-Wallet</option></select></div>
+      <div class="form-group"><label>Jumlah Dibayar</label><input type="number" id="chk-bayar" value="${total}" inputmode="numeric"></div>
+      <div id="chk-summary" style="background:var(--bg);border-radius:10px;padding:12px;margin:10px 0;font-size:14px;">
+        <div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>${formatRupiah(total)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-weight:800;margin-top:6px;"><span>Total</span><span id="chk-total-tampil">${formatRupiah(total)}</span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;"><span>Kembalian</span><span id="chk-kembali-tampil">${formatRupiah(0)}</span></div>
+      </div>
+      <button class="btn btn-primary" id="btn-proses-bayar">Proses & Simpan Transaksi</button>`,
+    onMount: root => {
+      const diskonEl = root.querySelector('#chk-diskon');
+      const bayarEl = root.querySelector('#chk-bayar');
+      const update = () => {
+        const diskon = Number(diskonEl.value || 0);
+        const totalBaru = Math.max(0, total - diskon);
+        root.querySelector('#chk-total-tampil').textContent = formatRupiah(totalBaru);
+        root.querySelector('#chk-kembali-tampil').textContent = formatRupiah(Number(bayarEl.value || 0) - totalBaru);
+      };
+      diskonEl.addEventListener('input', update);
+      bayarEl.addEventListener('input', update);
+      root.querySelector('#btn-proses-bayar').addEventListener('click', async () => {
+        const btn = root.querySelector('#btn-proses-bayar');
+        btn.disabled = true; btn.textContent = 'Memproses...';
+        try {
+          const hasil = await apiPost('createTransaksi', withIdUser({
+            items: AppState.cart.map(it => ({
+              kodeObat: it.kodeObat,
+              qty: it.qty,
+              satuan: it.satuan,
+              hargaSatuan: it.hargaSatuan
+            })),
+            idPelanggan: root.querySelector('#chk-pelanggan').value || '',
+            diskon: Number(diskonEl.value || 0),
+            pajak: 0,
+            metodeBayar: root.querySelector('#chk-metode').value,
+            bayar: Number(bayarEl.value || 0)
+          }));
+          tutupModal();
+          AppState.cart = [];
+          invalidasiCacheProduk();
+          renderCartFab();
+          tampilkanStrukRingkas(hasil);
+          navigasiKe('kasir', false);
+        } catch (err) {
+          tampilkanError(err);
+          btn.disabled = false;
+          btn.textContent = 'Proses & Simpan Transaksi';
+        }
+      });
+    }
+  });
+}
+bukaCheckoutModal = bukaCheckoutModalDenganSatuan;
