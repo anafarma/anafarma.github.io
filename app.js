@@ -935,9 +935,62 @@ function bukaAdjustStokModal(p) {
   });
 }
 
-function bukaFormProdukModal(p) {
+/**
+ * =====================================================================
+ * APOTEK ANA FARMA — app.js PATCH
+ * =====================================================================
+ * 
+ * FITUR BARU:
+ * 1. Multi-Satuan Harga Obat (Satuan_Jual_2, Isi_Per_Satuan_2, Harga_Jual_2, Aktif_Satuan_2)
+ * 2. Lokasi Rak Dropdown (dari sheet Lokasi_Rak)
+ * 
+ * INSTRUKSI PEMASANGAN:
+ * 1. Di app.js, cari fungsi: bukaFormProdukModal(p)
+ * 2. Ganti SELURUH isi fungsi bukaFormProdukModal (line 960-1027) dengan kode di bawah
+ * 3. ATAU, jika tidak yakin, lihat instruksi detailed di PATCH_INSTRUCTION.txt
+ * 
+ * =====================================================================
+ */
+ 
+// =====================================================================
+// TAMBAHAN UNTUK SUPPORT LOKASI_RAK DROPDOWN
+// =====================================================================
+// Cache lokasi_rak untuk performa
+const LokasiRakCache = {
+  data: [],
+  lastFetch: 0,
+  cacheDuration: 60000 // 1 menit
+};
+ 
+async function ambilLokasiRak() {
+  const now = Date.now();
+  if (LokasiRakCache.data.length && (now - LokasiRakCache.lastFetch) < LokasiRakCache.cacheDuration) {
+    return LokasiRakCache.data;
+  }
+  try {
+    const data = await apiGet('getLokasi', { idUser: AppState.user ? AppState.user.idUser : null });
+    LokasiRakCache.data = data || [];
+    LokasiRakCache.lastFetch = now;
+    return LokasiRakCache.data;
+  } catch (e) {
+    console.warn('⚠️ Gagal ambil lokasi rak:', e.message);
+    return [];
+  }
+}
+ 
+// =====================================================================
+// FUNGSI FORM PRODUK YANG DIPERBARUI (GANTI FUNCTION YANG LAMA)
+// =====================================================================
+async function bukaFormProdukModal(p) {
   const isEdit = !!p;
   const isOwner = AppState.user.role === 'Owner';
+  
+  // Ambil daftar lokasi untuk dropdown
+  const lokasiList = await ambilLokasiRak();
+  const lokasiOptions = lokasiList.map(loc => 
+    `<option value="${escapeHtml(loc.ID_Lokasi)}" ${isEdit && p.Lokasi_Rak === loc.ID_Lokasi ? 'selected' : ''}>${escapeHtml(loc.Nama_Display || loc.ID_Lokasi)} (${escapeHtml(loc.Zona || '')})</option>`
+  ).join('');
+  
   bukaModal({
     title: isEdit ? 'Edit Produk' : 'Tambah Produk',
     bodyHtml: `
@@ -946,43 +999,101 @@ function bukaFormProdukModal(p) {
         <div class="form-group"><label>Kategori</label><input type="text" id="f-kategori" value="${isEdit ? escapeHtml(p.Kategori || '') : 'Umum'}"></div>
         <div class="form-group"><label>Satuan Jual (eceran)</label><input type="text" id="f-satuan" value="${isEdit ? escapeHtml(p.Satuan || '') : 'Pcs'}" placeholder="cth: Kaplet, Botol, Tube"></div>
       </div>
+      
       <div class="grid-2">
         <div class="form-group"><label>Satuan Beli (dari supplier)</label><input type="text" id="f-satuanbeli" value="${isEdit ? escapeHtml(p.Satuan_Beli || p.Satuan || '') : 'Pcs'}" placeholder="cth: Box, Dus, Strip"></div>
         <div class="form-group"><label>Isi per Satuan Beli</label><input type="number" id="f-isipersatuanbeli" value="${isEdit ? (p.Isi_Per_Satuan_Beli || 1) : 1}" inputmode="numeric" min="1"></div>
       </div>
       <div class="form-hint" style="margin:-8px 0 12px;">Contoh: kalau 1 Box isi 100 Kaplet dan dijual per Kaplet, isi "Box" di Satuan Beli, "Kaplet" di Satuan Jual, dan "100" di Isi per Satuan Beli. Kalau tidak dipecah (beli & jual sama), isi "1".</div>
+      
       ${!isEdit ? `<div class="form-group"><label>Stok Awal (dalam satuan jual/eceran)</label><input type="number" id="f-stok" value="0" inputmode="numeric"></div>` : ''}
+      
       <div class="grid-2">
         <div class="form-group"><label>Stok Minimum</label><input type="number" id="f-stokmin" value="${isEdit ? p.Stok_Minimum : 5}" inputmode="numeric"></div>
         <div class="form-group"><label>Harga Beli</label><input type="number" id="f-hargabeli" value="${isEdit ? p.Harga_Beli : 0}" inputmode="numeric"></div>
       </div>
+      
       <div class="form-group">
         <label>Harga Jual ${!isOwner ? '(hanya Owner yang bisa mengubah)' : ''}</label>
         <input type="number" id="f-hargajual" value="${isEdit ? p.Harga_Jual : 0}" inputmode="numeric" ${!isOwner ? 'disabled' : ''}>
       </div>
-      <div class="grid-2">
-        <div class="form-group"><label>Supplier</label><input type="text" id="f-supplier" value="${isEdit ? escapeHtml(p.Supplier || '') : ''}"></div>
-        <div class="form-group"><label>Lokasi Rak</label><input type="text" id="f-rak" value="${isEdit ? escapeHtml(p.Lokasi_Rak || '') : ''}"></div>
+      
+      <!-- ===== FITUR BARU: MULTI-SATUAN HARGA ===== -->
+      <div style="background:var(--primary-light);padding:12px;border-radius:var(--radius-sm);margin-bottom:14px;">
+        <div style="font-weight:700;font-size:13px;color:var(--primary-dark);margin-bottom:12px;">📦 Satuan Jual Alternatif (Opsional)</div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>Satuan Alternatif (cth: Box)</label>
+            <input type="text" id="f-satuan2" value="${isEdit ? escapeHtml(p.Satuan_Jual_2 || '') : ''}" placeholder="Opsional">
+          </div>
+          <div class="form-group">
+            <label>Isi per Satuan (cth: 10)</label>
+            <input type="number" id="f-isi2" value="${isEdit ? (p.Isi_Per_Satuan_2 || 1) : 1}" inputmode="numeric" min="1">
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label>Harga untuk Satuan Alternatif ${!isOwner ? '(hanya Owner)' : ''}</label>
+            <input type="number" id="f-harga2" value="${isEdit ? p.Harga_Jual_2 : 0}" inputmode="numeric" ${!isOwner ? 'disabled' : ''}>
+          </div>
+          <div class="form-group" style="display:flex;align-items:flex-end;">
+            <label style="display:flex;align-items:center;gap:8px;margin-bottom:0;">
+              <input type="checkbox" id="f-aktif2" ${isEdit && p.Aktif_Satuan_2 ? 'checked' : ''} style="width:auto;">
+              <span>Aktifkan</span>
+            </label>
+          </div>
+        </div>
+        <div class="form-hint">Misal: jual per Pcs Rp10.000, atau per Box (10 pcs) Rp95.000. Kosongkan jika tidak perlu.</div>
       </div>
+      
+      <div class="grid-2">
+        <div class="form-group">
+          <label>Supplier</label>
+          <input type="text" id="f-supplier" value="${isEdit ? escapeHtml(p.Supplier || '') : ''}">
+        </div>
+        <div class="form-group">
+          <label>Lokasi Rak</label>
+          <select id="f-rak">
+            <option value="">-- Pilih Lokasi --</option>
+            ${lokasiOptions}
+          </select>
+        </div>
+      </div>
+      
       <div class="form-group"><label>Tanggal Expired (opsional)</label><input type="date" id="f-expired" value="${isEdit && p.Expired ? new Date(p.Expired).toISOString().slice(0,10) : ''}"></div>
+      
       ${isEdit && isOwner ? `<div class="form-group"><label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="f-aktif" ${p.Aktif ? 'checked' : ''} style="width:auto;"> Produk Aktif (tampil di kasir)</label></div>` : ''}
+      
       <button class="btn btn-primary" id="btn-simpan-produk">Simpan</button>`,
     onMount: (root) => {
       root.querySelector('#btn-simpan-produk').addEventListener('click', async () => {
         const btn = root.querySelector('#btn-simpan-produk');
         const nama = root.querySelector('#f-nama').value.trim();
         if (!nama) { toast('Nama obat wajib diisi.', 'warn'); return; }
+        
         btn.disabled = true; btn.textContent = 'Menyimpan...';
         try {
           const payload = {
-            namaObat: nama, kategori: root.querySelector('#f-kategori').value,
-            satuan: root.querySelector('#f-satuan').value, stokMinimum: root.querySelector('#f-stokmin').value,
-            hargaBeli: root.querySelector('#f-hargabeli').value, supplier: root.querySelector('#f-supplier').value,
-            lokasiRak: root.querySelector('#f-rak').value, expired: root.querySelector('#f-expired').value,
+            namaObat: nama, 
+            kategori: root.querySelector('#f-kategori').value,
+            satuan: root.querySelector('#f-satuan').value, 
+            stokMinimum: root.querySelector('#f-stokmin').value,
+            hargaBeli: root.querySelector('#f-hargabeli').value, 
+            supplier: root.querySelector('#f-supplier').value,
+            lokasiRak: root.querySelector('#f-rak').value,
+            expired: root.querySelector('#f-expired').value,
             satuanBeli: root.querySelector('#f-satuanbeli').value,
-            isiPerSatuanBeli: root.querySelector('#f-isipersatuanbeli').value
+            isiPerSatuanBeli: root.querySelector('#f-isipersatuanbeli').value,
+            
+            // ===== FIELDS BARU: MULTI-SATUAN =====
+            satuanJual2: root.querySelector('#f-satuan2').value || '',
+            isiPerSatuan2: root.querySelector('#f-isi2').value || 1,
+            hargaJual2: root.querySelector('#f-harga2').value || 0,
+            aktifSatuan2: root.querySelector('#f-aktif2').checked ? true : false
           };
+          
           if (isOwner) payload.hargaJual = root.querySelector('#f-hargajual').value;
+          
           if (isEdit) {
             payload.kodeObat = p.Kode_Obat;
             await apiPost('updateProduk', withIdUser(payload));
@@ -994,15 +1105,51 @@ function bukaFormProdukModal(p) {
             payload.stok = root.querySelector('#f-stok').value;
             await apiPost('addProduk', withIdUser(payload));
           }
+          
           toast('Produk disimpan.', 'success');
           tutupModal();
           invalidasiCacheProduk();
           renderScreen('stok');
-        } catch (err) { tampilkanError(err); btn.disabled = false; btn.textContent = 'Simpan'; }
+        } catch (err) { 
+          tampilkanError(err); 
+          btn.disabled = false; 
+          btn.textContent = 'Simpan'; 
+        }
       });
     }
   });
 }
+ 
+// =====================================================================
+// STYLE TAMBAHAN untuk select dropdown (paste di <style> tag HTML)
+// =====================================================================
+/*
+Tambahkan ini di bagian <style> di index.html (setelah line 140):
+ 
+.form-group select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+}
+ 
+.form-group select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
+}
+ 
+.form-group select option {
+  padding: 8px;
+  color: var(--text);
+  background: #fff;
+}
+*/
+ 
 
 // =====================================================================
 // LAYAR: RIWAYAT TRANSAKSI
