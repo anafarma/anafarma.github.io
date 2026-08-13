@@ -252,6 +252,108 @@ table.simple-table td{padding:8px 4px;border-bottom:1px solid var(--border);}
   body{background:#e5e7eb;}
   #app{max-width:640px;margin:0 auto;background:var(--bg);min-height:100vh;box-shadow:0 0 40px rgba(0,0,0,.08);}
 }
+
+
+/* ===== KODE DITAMBAHKAN DARI FILE PERTAMA ===== */
+/* ===== KASIR OPTIMIZATION STYLES ===== */
+
+.qty-stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  background: #fff;
+}
+
+.qty-stepper button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--bg);
+  cursor: pointer;
+  font-weight: 700;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.qty-stepper button:hover {
+  background: var(--primary-light);
+  color: var(--primary-dark);
+}
+
+.qty-stepper button:active {
+  transform: scale(0.92);
+}
+
+.qty-stepper .qty-display {
+  min-width: 30px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.btn-block {
+  width: 100%;
+  display: block !important;
+}
+
+#kasir-actions {
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.btn-satuan {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-satuan:hover {
+  border-color: var(--primary);
+}
+
+.btn-satuan.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
+}
+
+.btn-sm {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.btn-outline:hover {
+  background: var(--bg);
+  border-color: var(--primary);
+  color: var(--primary);
+}
 </style>
 </head>
 <body>
