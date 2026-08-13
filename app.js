@@ -1,3 +1,19 @@
+/*
+ * =====================================================================
+ * INTEGRATION PATCH — app_kasir_integrated_v2.js
+ * =====================================================================
+ * Fitur dari file pertama diintegrasikan ke app.js tanpa menghapus
+ * modul lain pada file kedua:
+ * - cache produk 60 menit
+ * - pagination kasir 30 item
+ * - tombol keranjang sticky + status sinkronisasi
+ * - optimistic +/- update
+ * - verifikasi stok asynchronous
+ * - multi-satuan pada keranjang
+ * - checkout dengan verifikasi stok
+ * =====================================================================
+ */
+
 /**
  * =====================================================================
  * APOTEK ANA FARMA — app.js (Frontend PWA)
@@ -16,7 +32,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbyeJb7dYKaKzpnlU0xnEif4
 
 const STORAGE_KEY = 'anafarma_sesi_v1';
 const AUTO_LOGOUT_MS = 20 * 60 * 1000; // 20 menit, bisa ditimpa oleh Pengaturan.auto_logout_menit
-const PRODUK_CACHE_MS = 30 * 1000; // segarkan cache produk tiap 30 detik
+const PRODUK_CACHE_MS = 60 * 60 * 1000; // 1 hour (was 30s) — integrated optimization
 
 // ---------------------------------------------------------------------
 // STATE GLOBAL
@@ -32,7 +48,13 @@ const AppState = {
   navHistory: [],
   autoLogoutTimer: null,
   isOnline: navigator.onLine,
-  deferredInstallPrompt: null
+  deferredInstallPrompt: null,
+
+  // Added from app_kasir_integrated_v2.js
+  kasirCurrentPage: 1,
+  kasirCurrentQuery: '',
+  stokVerificationPending: false,
+  stokVerificationResult: null
 };
 
 // ---------------------------------------------------------------------
@@ -532,6 +554,7 @@ SCREEN_RENDERERS.dashboard = async function (root) {
 // =====================================================================
 function cekBolehTransaksi() {
   const u = AppState.user;
+  if (!u) return 'Sesi pengguna tidak ditemukan. Silakan login kembali.';
   if (u.role !== 'Owner') {
     if (!u.shiftAktif || u.shiftAktif.status !== 'Aktif') {
       return 'Anda belum memulai shift. Mulai shift dari menu Beranda terlebih dahulu.';
@@ -540,47 +563,206 @@ function cekBolehTransaksi() {
   return null;
 }
 
-function tambahKeKeranjang(produk) {
-  const blokir = cekBolehTransaksi();
-  if (blokir) { toast(blokir, 'warn'); return; }
-  const existing = AppState.cart.find(x => x.kodeObat === produk.Kode_Obat);
-  const stokTersedia = Number(produk.Stok);
-  if (existing) {
-    if (existing.qty + 1 > stokTersedia) { toast('Stok tidak cukup.', 'warn'); return; }
-    existing.qty += 1;
-  } else {
-    if (stokTersedia <= 0) { toast('Stok habis.', 'warn'); return; }
-    AppState.cart.push({ kodeObat: produk.Kode_Obat, namaObat: produk.Nama_Obat, hargaSatuan: Number(produk.Harga_Jual), qty: 1, stokTersedia: stokTersedia });
+// ---------------------------------------------------------------------
+// MULTI-SATUAN PENJUALAN
+// ---------------------------------------------------------------------
+// Backend saat ini mengirim field master secara langsung:
+// Satuan, Harga_Jual, Satuan_Jual_2, Isi_Per_Satuan_2,
+// Harga_Jual_2, Aktif_Satuan_2.
+// Helper ini juga menerima format satuanJual[] bila suatu saat backend
+// mengirim format tersebut. Dengan begitu frontend tetap kompatibel.
+function pilihanPenjualanProduk(produk) {
+  if (!produk) return [];
+
+  if (Array.isArray(produk.satuanJual) && produk.satuanJual.length) {
+    return produk.satuanJual
+      .map((s, i) => ({
+        key: i === 0 ? 'normal' : 'alternatif_' + i,
+        satuan: String(s.satuan || '').trim(),
+        harga: Number(s.hargaJual) || 0,
+        isi: Math.max(1, Number(s.isi || s.isiPerSatuan || 1) || 1)
+      }))
+      .filter(s => s.satuan && s.harga > 0);
   }
+
+  const hasil = [];
+  const satuanNormal = String(produk.Satuan || 'Pcs').trim() || 'Pcs';
+  const hargaNormal = Number(produk.Harga_Jual) || 0;
+  if (hargaNormal > 0) {
+    hasil.push({
+      key: 'normal',
+      satuan: satuanNormal,
+      harga: hargaNormal,
+      isi: 1
+    });
+  }
+
+  const aktif2 = produk.Aktif_Satuan_2 === true ||
+    produk.Aktif_Satuan_2 === 1 ||
+    String(produk.Aktif_Satuan_2).toUpperCase() === 'TRUE';
+  const satuan2 = String(produk.Satuan_Jual_2 || '').trim();
+  const harga2 = Number(produk.Harga_Jual_2) || 0;
+  const isi2 = Math.max(1, Number(produk.Isi_Per_Satuan_2) || 1);
+
+  if (aktif2 && satuan2 && harga2 > 0) {
+    hasil.push({
+      key: 'alternatif',
+      satuan: satuan2,
+      harga: harga2,
+      isi: isi2
+    });
+  }
+
+  return hasil;
+}
+
+function pilihanAktifUntukCart(produk, item) {
+  const pilihan = pilihanPenjualanProduk(produk);
+  if (!pilihan.length) return null;
+  const key = item && item.satuanJual ? item.satuanJual : 'normal';
+  return pilihan.find(x => x.key === key) || pilihan[0];
+}
+
+function buatItemKeranjang(produk, pilihan, qty) {
+  const stok = Number(produk.Stok) || 0;
+  const maxQty = Math.floor(stok / pilihan.isi);
+  if (maxQty <= 0) return null;
+
+  return {
+    kodeObat: produk.Kode_Obat,
+    namaObat: produk.Nama_Obat,
+    hargaSatuan: Number(pilihan.harga) || 0,
+    qty: Math.min(Math.max(1, Number(qty) || 1), maxQty),
+    stokTersedia: stok,
+    satuanJual: pilihan.key,
+    namaSatuan: pilihan.satuan,
+    isiPerSatuan: pilihan.isi,
+    synced: false
+  };
+}
+
+// Tambahkan produk dengan satuan penjualan tertentu.
+// Satu produk hanya mempunyai satu baris aktif di keranjang; mengganti
+// Pcs -> Box akan mengganti satuan dan harga pada item yang sama.
+function tambahKeKeranjang(produk, pilihanKey) {
+  const blokir = cekBolehTransaksi();
+  if (blokir) { toast(blokir, 'warn'); return false; }
+
+  const pilihan = pilihanPenjualanProduk(produk);
+  if (!pilihan.length) {
+    toast('Produk belum memiliki harga jual yang valid.', 'warn');
+    return false;
+  }
+
+  const target = pilihan.find(x => x.key === pilihanKey) || pilihan[0];
+  const stok = Number(produk.Stok) || 0;
+  const maxQty = Math.floor(stok / target.isi);
+  if (maxQty <= 0) {
+    toast('Stok tidak cukup untuk penjualan per ' + target.satuan + '.', 'warn');
+    return false;
+  }
+
+  let item = AppState.cart.find(x => x.kodeObat === produk.Kode_Obat);
+
+  if (!item) {
+    item = buatItemKeranjang(produk, target, 1);
+    if (!item) {
+      toast('Stok tidak cukup.', 'warn');
+      return false;
+    }
+    AppState.cart.push(item);
+  } else {
+    // Jika tombol satuan yang dipilih berbeda, ganti satuan terlebih dahulu.
+    if (item.satuanJual !== target.key) {
+      const qtyBaru = Math.min(Math.max(1, Number(item.qty) || 1), maxQty);
+      item.satuanJual = target.key;
+      item.namaSatuan = target.satuan;
+      item.isiPerSatuan = target.isi;
+      item.hargaSatuan = target.harga;
+      item.qty = qtyBaru;
+      item.stokTersedia = stok;
+      item.synced = false;
+    } else {
+      if ((item.qty + 1) > maxQty) {
+        toast('Stok maksimal ' + maxQty + ' ' + target.satuan + '.', 'warn');
+        return false;
+      }
+      item.qty += 1;
+      item.stokTersedia = stok;
+      item.synced = false;
+    }
+  }
+
+  updateKeranjangUIStatus();
   renderCartFab();
-  renderKasirList(AppState.produkCache, document.getElementById('kasir-search') ? document.getElementById('kasir-search').value : '');
+
+  const searchEl = document.getElementById('kasir-search');
+  renderKasirList(
+    AppState.produkCache,
+    searchEl ? searchEl.value : '',
+    AppState.kasirCurrentPage || 1
+  );
+
+  // Verifikasi tetap asynchronous sehingga tombol + tidak menunggu server.
+  setTimeout(() => verifyCartItemAsync(produk.Kode_Obat), 0);
+  return true;
 }
 
 function ubahQtyKeranjang(kodeObat, delta) {
   const item = AppState.cart.find(x => x.kodeObat === kodeObat);
   if (!item) return;
-  item.qty += delta;
-  if (item.qty <= 0) {
-    AppState.cart = AppState.cart.filter(x => x.kodeObat !== kodeObat);
-  } else if (item.qty > item.stokTersedia) {
-    item.qty = item.stokTersedia;
-    toast('Stok maksimal ' + item.stokTersedia, 'warn');
+
+  const isi = Math.max(1, Number(item.isiPerSatuan) || 1);
+  const stok = Number(item.stokTersedia) || 0;
+  const maxQty = Math.floor(stok / isi);
+  const qtyBaru = Number(item.qty || 0) + Number(delta || 0);
+
+  if (qtyBaru <= 0) {
+    AppState.cart = AppState.cart.filter(x => x !== item);
+  } else if (qtyBaru > maxQty) {
+    item.qty = maxQty;
+    toast('Stok maksimal ' + maxQty + ' ' + (item.namaSatuan || 'unit'), 'warn');
+  } else {
+    item.qty = qtyBaru;
   }
+
+  if (item) item.synced = false;
+  updateKeranjangUIStatus();
   renderCartFab();
-  if (document.getElementById('modal-root').querySelector('.modal-overlay.show')) renderKeranjangModalBody();
+
+  const modal = document.getElementById('modal-root');
+  if (modal && modal.querySelector('.modal-overlay.show')) renderKeranjangModalBody();
+
+  const searchEl = document.getElementById('kasir-search');
+  if (document.getElementById('kasir-list')) {
+    renderKasirList(
+      AppState.produkCache,
+      searchEl ? searchEl.value : '',
+      AppState.kasirCurrentPage || 1
+    );
+  }
+
+  if (qtyBaru > 0) setTimeout(() => verifyCartItemAsync(kodeObat), 0);
 }
 
 function totalKeranjang() {
-  return AppState.cart.reduce((s, x) => s + x.qty * x.hargaSatuan, 0);
+  return AppState.cart.reduce((s, x) => s + Number(x.qty || 0) * Number(x.hargaSatuan || 0), 0);
 }
+
 function jumlahItemKeranjang() {
-  return AppState.cart.reduce((s, x) => s + x.qty, 0);
+  return AppState.cart.reduce((s, x) => s + Number(x.qty || 0), 0);
 }
 
 function renderCartFab() {
   let fab = document.getElementById('cart-fab');
-  if (AppState.currentScreen !== 'kasir') { if (fab) fab.remove(); return; }
-  if (!AppState.cart.length) { if (fab) fab.remove(); return; }
+  if (AppState.currentScreen !== 'kasir') {
+    if (fab) fab.remove();
+    return;
+  }
+  if (!AppState.cart.length) {
+    if (fab) fab.remove();
+    return;
+  }
   if (!fab) {
     fab = document.createElement('button');
     fab.id = 'cart-fab';
@@ -589,45 +771,115 @@ function renderCartFab() {
     fab.addEventListener('click', bukaKeranjangModal);
   }
   fab.innerHTML = `<span><span class="cart-count">${jumlahItemKeranjang()}</span>Lihat Keranjang</span><span>${formatRupiah(totalKeranjang())}</span>`;
+  updateKeranjangUIStatus();
 }
 
-function renderKasirList(produkList, query) {
+function renderKasirList(produkList, query, page = 1) {
   const listEl = document.getElementById('kasir-list');
   if (!listEl) return;
-  const q = (query || '').toLowerCase().trim();
-  const filtered = q ? produkList.filter(p => p.Nama_Obat.toLowerCase().includes(q)) : produkList.slice(0, 60);
-  if (!filtered.length) {
+
+  const source = Array.isArray(produkList) ? produkList : [];
+  const q = String(query || '').toLowerCase().trim();
+  const filtered = q
+    ? source.filter(p => String(p.Nama_Obat || '').toLowerCase().includes(q))
+    : source;
+
+  const pageSize = 30;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  page = Math.min(Math.max(1, Number(page) || 1), totalPages);
+  AppState.kasirCurrentPage = page;
+  AppState.kasirCurrentQuery = query || '';
+
+  const start = (page - 1) * pageSize;
+  const paged = filtered.slice(start, start + pageSize);
+
+  if (!paged.length) {
     listEl.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div>Produk tidak ditemukan.</div>`;
+    updateKeranjangUIStatus();
     return;
   }
-  listEl.innerHTML = filtered.slice(0, 100).map(p => {
-    const diKeranjang = AppState.cart.find(x => x.kodeObat === p.Kode_Obat);
-    const habis = Number(p.Stok) <= 0;
+
+  listEl.innerHTML = paged.map(p => {
+    const pilihan = pilihanPenjualanProduk(p);
+    const item = AppState.cart.find(x => x.kodeObat === p.Kode_Obat);
+    const stok = Number(p.Stok) || 0;
+
+    if (!pilihan.length) {
+      return `
+        <div class="list-item">
+          <div class="li-main">
+            <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
+            <div class="li-sub">📍 ${escapeHtml(namaLokasiRakProduk(p))} • Stok: ${stok} ${escapeHtml(p.Satuan || '')}</div>
+            <div class="form-hint" style="margin-top:5px;color:var(--danger);">Harga jual belum tersedia.</div>
+          </div>
+        </div>`;
+    }
+
+    const activeKey = item ? item.satuanJual : '';
+    const pilihanHtml = pilihan.map(s => {
+      const maxQty = Math.floor(stok / s.isi);
+      const disabled = maxQty <= 0;
+      const active = activeKey === s.key;
+      return `
+        <button type="button"
+          class="btn-satuan ${active ? 'active' : ''}"
+          data-pilihan-kode="${escapeHtml(p.Kode_Obat)}"
+          data-pilihan-satuan="${escapeHtml(s.key)}"
+          ${disabled ? 'disabled' : ''}
+          title="Stok maksimal ${maxQty} ${escapeHtml(s.satuan)}">
+          ${s.key === 'alternatif' ? '📦 ' : ''}${escapeHtml(s.satuan)} ${formatRupiah(s.harga)}
+        </button>`;
+    }).join('');
+
+    const qtyHtml = item ? `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:7px;justify-content:flex-end;">
+        <span style="font-size:11.5px;color:var(--text-dim);">${escapeHtml(item.namaSatuan || '')}</span>
+        <div class="qty-stepper">
+          <button type="button" class="qty-btn qty-minus" data-kode-obat="${escapeHtml(p.Kode_Obat)}">−</button>
+          <span class="qty-display">${item.qty}</span>
+          <button type="button" class="qty-btn qty-plus" data-kode-obat="${escapeHtml(p.Kode_Obat)}">+</button>
+        </div>
+      </div>` : '';
+
     return `
-    <div class="list-item">
-      <div class="li-main">
-        <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-        <div class="li-sub">Stok: ${p.Stok} ${p.Satuan || ''} • ${formatRupiah(p.Harga_Jual)}</div>
-      </div>
-      <div class="li-right">
-        ${habis ? '<span class="pill pill-danger">Habis</span>' :
-          (diKeranjang
-            ? `<div class="qty-stepper">
-                <button data-qty-minus="${p.Kode_Obat}">−</button>
-                <span>${diKeranjang.qty}</span>
-                <button data-qty-plus="${p.Kode_Obat}">+</button>
-              </div>`
-            : `<button class="btn btn-primary btn-sm" data-add="${p.Kode_Obat}">+ Tambah</button>`)}
-      </div>
-    </div>`;
+      <div class="list-item" data-kode-obat="${escapeHtml(p.Kode_Obat)}">
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
+          <div class="li-sub">📍 ${escapeHtml(namaLokasiRakProduk(p))} • Stok: ${stok} ${escapeHtml(p.Satuan || '')}</div>
+          <div style="margin-top:7px;">
+            <div style="font-size:11.5px;font-weight:700;color:var(--text-dim);margin-bottom:5px;">Pilih penjualan</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">${pilihanHtml}</div>
+          </div>
+        </div>
+        <div class="li-right" style="min-width:145px;">
+          ${qtyHtml}
+        </div>
+      </div>`;
   }).join('');
 
-  listEl.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
-    const p = produkList.find(x => x.Kode_Obat === b.dataset.add);
-    if (p) tambahKeKeranjang(p);
-  }));
-  listEl.querySelectorAll('[data-qty-plus]').forEach(b => b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyPlus, 1)));
-  listEl.querySelectorAll('[data-qty-minus]').forEach(b => b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyMinus, -1)));
+  // Event pilihan penjualan. Delegasi tidak digunakan agar setiap render
+  // menghasilkan handler baru yang pasti menunjuk produk yang benar.
+  listEl.querySelectorAll('[data-pilihan-kode]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const kode = btn.dataset.pilihanKode;
+      const satuan = btn.dataset.pilihanSatuan;
+      const produk = source.find(x => String(x.Kode_Obat) === String(kode));
+      if (produk) tambahKeKeranjang(produk, satuan);
+    });
+  });
+
+  listEl.querySelectorAll('.qty-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      ubahQtyKeranjang(btn.dataset.kodeObat, btn.classList.contains('qty-plus') ? 1 : -1);
+    });
+  });
+
+  if (totalPages > 1) renderPaginationControls(page, totalPages, query, source);
+  updateKeranjangUIStatus();
 }
 
 SCREEN_RENDERERS.kasir = async function (root) {
@@ -638,47 +890,103 @@ SCREEN_RENDERERS.kasir = async function (root) {
         <input type="text" id="kasir-search" placeholder="Cari nama obat...">
       </div>
       <div id="kasir-list"></div>
+
+      <div id="kasir-actions" style="display:none;position:sticky;bottom:calc(64px + var(--safe-bottom));padding:10px 0 8px;background:linear-gradient(to top, var(--bg) 75%, rgba(244,246,247,0));z-index:30;">
+        <button class="btn btn-primary btn-block" id="btn-lanjut-keranjang">
+          🛒 Lihat Keranjang (<span id="cart-items-count">0</span>) • <span id="cart-total">Rp0</span>
+        </button>
+        <div style="font-size:11px;color:var(--text-faint);text-align:center;margin-top:5px;">
+          <span id="cart-synced-status" style="display:none;">⏳ Verifikasi stok...</span>
+          <span id="cart-ready-status" style="display:none;">✅ Siap checkout</span>
+        </div>
+      </div>
     </div>`;
+
   const produk = await ambilProduk();
-  renderKasirList(produk, '');
   const searchInput = document.getElementById('kasir-search');
-  searchInput.addEventListener('input', debounce(() => renderKasirList(AppState.produkCache, searchInput.value), 150));
-  renderCartFab();
+  AppState.kasirCurrentPage = 1;
+  AppState.kasirCurrentQuery = '';
+  renderKasirList(produk, '', 1);
+
+  searchInput.addEventListener('input', debounce(() => {
+    AppState.kasirCurrentQuery = searchInput.value;
+    AppState.kasirCurrentPage = 1;
+    renderKasirList(AppState.produkCache, searchInput.value, 1);
+  }, 150));
+
+  const btnLanjut = document.getElementById('btn-lanjut-keranjang');
+  if (btnLanjut) btnLanjut.addEventListener('click', bukaKeranjangModal);
+
+  updateKeranjangUIStatus();
+  if (AppState.kasirStatusTimer) clearInterval(AppState.kasirStatusTimer);
+  AppState.kasirStatusTimer = setInterval(() => {
+    if (AppState.currentScreen === 'kasir') updateKeranjangUIStatus();
+  }, 5000);
 };
 
 // ---------------- Modal Keranjang & Checkout ----------------
 function renderKeranjangModalBody() {
   const body = document.querySelector('#modal-root .modal-body');
   if (!body) return;
+
   if (!AppState.cart.length) {
     body.innerHTML = `<div class="empty-state"><div class="empty-icon">🛒</div>Keranjang kosong.</div>`;
     return;
   }
+
+  const cartItemsHtml = AppState.cart.map(it => {
+    const produk = AppState.produkCache.find(p => p.Kode_Obat === it.kodeObat);
+    const pilihan = produk ? pilihanPenjualanProduk(produk) : [];
+    const syncIcon = it.synced ? '✅' : '⏳';
+
+    return `
+      <div class="list-item" data-kode-item="${escapeHtml(it.kodeObat)}">
+        <div class="li-main">
+          <div class="li-title">${escapeHtml(it.namaObat)} <span style="font-size:11px;color:var(--text-faint);">${syncIcon}</span></div>
+          <div class="li-sub">
+            ${escapeHtml(it.namaSatuan || it.satuanJual || '')} • ${formatRupiah(it.hargaSatuan)} × ${it.qty} = ${formatRupiah(it.qty * it.hargaSatuan)}
+          </div>
+          ${pilihan.length > 1 ? `
+            <div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap;">
+              ${pilihan.map(s => `
+                <button type="button" class="btn-satuan ${it.satuanJual === s.key ? 'active' : ''}"
+                  data-cart-kode="${escapeHtml(it.kodeObat)}" data-cart-satuan="${escapeHtml(s.key)}">
+                  ${s.key === 'alternatif' ? '📦 ' : ''}${escapeHtml(s.satuan)} ${formatRupiah(s.harga)}
+                </button>`).join('')}
+            </div>` : ''}
+        </div>
+        <div class="qty-stepper">
+          <button type="button" class="qty-btn qty-minus-cart" data-kode-item="${escapeHtml(it.kodeObat)}">−</button>
+          <span class="qty-display">${it.qty}</span>
+          <button type="button" class="qty-btn qty-plus-cart" data-kode-item="${escapeHtml(it.kodeObat)}">+</button>
+        </div>
+      </div>`;
+  }).join('');
+
   body.innerHTML = `
-    <div id="cart-items">
-      ${AppState.cart.map(it => `
-        <div class="list-item">
-          <div class="li-main">
-            <div class="li-title">${escapeHtml(it.namaObat)}</div>
-            <div class="li-sub">${formatRupiah(it.hargaSatuan)} x ${it.qty} = ${formatRupiah(it.qty * it.hargaSatuan)}</div>
-          </div>
-          <div class="qty-stepper">
-            <button data-qty-minus="${it.kodeObat}">−</button>
-            <span>${it.qty}</span>
-            <button data-qty-plus="${it.kodeObat}">+</button>
-          </div>
-        </div>`).join('')}
-    </div>
+    <div id="cart-items">${cartItemsHtml}</div>
     <div style="display:flex;justify-content:space-between;font-weight:800;font-size:16px;margin:14px 0;">
-      <span>Total</span><span>${formatRupiah(totalKeranjang())}</span>
+      <span>Total</span><span id="cart-total-display">${formatRupiah(totalKeranjang())}</span>
     </div>
-    <button class="btn btn-primary" id="btn-lanjut-bayar">Lanjut ke Pembayaran</button>`;
-  body.querySelectorAll('[data-qty-plus]').forEach(b => b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyPlus, 1)));
-  body.querySelectorAll('[data-qty-minus]').forEach(b => b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.qtyMinus, -1)));
-  document.getElementById('btn-lanjut-bayar').addEventListener('click', bukaCheckoutModal);
+    <button class="btn btn-primary btn-block" id="btn-lanjut-bayar">Lanjut ke Pembayaran</button>`;
+
+  body.querySelectorAll('.qty-plus-cart').forEach(b =>
+    b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.kodeItem, 1))
+  );
+  body.querySelectorAll('.qty-minus-cart').forEach(b =>
+    b.addEventListener('click', () => ubahQtyKeranjang(b.dataset.kodeItem, -1))
+  );
+  body.querySelectorAll('[data-cart-kode]').forEach(b =>
+    b.addEventListener('click', () => ubahSatuanKeranjang(b.dataset.cartKode, b.dataset.cartSatuan))
+  );
+  body.querySelector('#btn-lanjut-bayar').addEventListener('click', bukaCheckoutModal);
 }
 
 function bukaKeranjangModal() {
+  if (!AppState.cart.length) {
+    toast('Keranjang masih kosong.', 'warn');
+    return;
+  }
   bukaModal({ title: 'Keranjang', bodyHtml: '' });
   renderKeranjangModalBody();
 }
@@ -717,10 +1025,19 @@ async function bukaCheckoutModal() {
         <div style="display:flex;justify-content:space-between;font-weight:800;margin-top:6px;"><span>Total</span><span id="chk-total-tampil">${formatRupiah(total)}</span></div>
         <div style="display:flex;justify-content:space-between;margin-top:6px;"><span>Kembalian</span><span id="chk-kembali-tampil">${formatRupiah(0)}</span></div>
       </div>
+      
+      <!-- ✅ OPTIMIZATION: Verification status -->
+      <div id="chk-verification" style="font-size: 12px; color: var(--text-faint); text-align: center; margin: 10px 0;">
+        <span id="chk-verify-status">🔄 Verifying stok...</span>
+      </div>
+      
       <button class="btn btn-primary" id="btn-proses-bayar">Proses & Simpan Transaksi</button>`,
     onMount: (root) => {
       const diskonEl = root.querySelector('#chk-diskon');
       const bayarEl = root.querySelector('#chk-bayar');
+      const btn = root.querySelector('#btn-proses-bayar');
+      const verifyStatusEl = root.querySelector('#chk-verify-status');
+      
       const update = () => {
         const diskon = Number(diskonEl.value || 0);
         const totalBaru = Math.max(0, total - diskon);
@@ -730,31 +1047,221 @@ async function bukaCheckoutModal() {
       };
       diskonEl.addEventListener('input', update);
       bayarEl.addEventListener('input', update);
+      
+      // ✅ OPTIMIZATION: Async stok verification (non-blocking)
+      verifikasiStokBeforeCheckout(AppState.cart)
+        .then(result => {
+          if (result.valid) {
+            verifyStatusEl.textContent = '✅ Stok terverifikasi';
+            verifyStatusEl.style.color = 'var(--success)';
+          } else {
+            verifyStatusEl.textContent = '❌ ' + result.error;
+            verifyStatusEl.style.color = 'var(--danger)';
+            btn.disabled = true;
+          }
+        })
+        .catch(e => {
+          verifyStatusEl.textContent = '⚠️ Verify gagal (akan check saat proses)';
+          verifyStatusEl.style.color = 'var(--warning)';
+        });
+      
       root.querySelector('#btn-proses-bayar').addEventListener('click', async () => {
         const btn = root.querySelector('#btn-proses-bayar');
-        btn.disabled = true; btn.textContent = 'Memproses...';
+        btn.disabled = true; 
+        btn.textContent = 'Memproses...';
         try {
-          const diskon = Number(diskonEl.value || 0);
-          const bayar = Number(bayarEl.value || 0);
-          const idPelanggan = root.querySelector('#chk-pelanggan').value;
+          // ✅ OPTIMIZATION: Batch semua item dalam 1 request
           const hasil = await apiPost('createTransaksi', withIdUser({
-            items: AppState.cart.map(it => ({ kodeObat: it.kodeObat, qty: it.qty, hargaSatuan: it.hargaSatuan })),
-            idPelanggan: idPelanggan || '', diskon: diskon, pajak: 0,
-            metodeBayar: root.querySelector('#chk-metode').value, bayar: bayar
+            items: AppState.cart.map(it => {
+              const isi = Math.max(1, Number(it.isiPerSatuan) || 1);
+              const qtyStok = Number(it.qty || 0) * isi;
+              // Backend lama menyimpan stok dalam satuan eceran.
+              // Karena itu Box/Strip dikonversi ke satuan stok di sini,
+              // sedangkan harga dibagi isi agar total penjualan tetap sama.
+              return {
+                kodeObat: it.kodeObat,
+                qty: qtyStok,
+                hargaSatuan: Number(it.hargaSatuan || 0) / isi,
+                satuanJual: it.satuanJual,
+                namaSatuan: it.namaSatuan || ''
+              };
+            }),
+            idPelanggan: root.querySelector('#chk-pelanggan').value || '',
+            diskon: Number(diskonEl.value || 0),
+            pajak: 0,
+            metodeBayar: root.querySelector('#chk-metode').value,
+            bayar: Number(bayarEl.value || 0)
           }));
           tutupModal();
           AppState.cart = [];
           invalidasiCacheProduk();
           renderCartFab();
+          updateKeranjangUIStatus();
           tampilkanStrukRingkas(hasil);
           navigasiKe('kasir', false);
         } catch (err) {
           tampilkanError(err);
-          btn.disabled = false; btn.textContent = 'Proses & Simpan Transaksi';
+          btn.disabled = false;
+          btn.textContent = 'Proses & Simpan Transaksi';
         }
       });
     }
   });
+}
+
+
+function renderPaginationControls(currentPage, totalPages, query, produkList) {
+  const listEl = document.getElementById('kasir-list');
+  
+  const paginationHtml = `
+    <div style="display: flex; justify-content: center; gap: 6px; margin-top: 16px; padding-bottom: 80px; flex-wrap: wrap;">
+      ${currentPage > 1 ? `
+        <button class="btn btn-outline btn-sm" id="btn-prev-page">← Sebelumnya</button>
+      ` : ''}
+      <span style="padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-weight: 600;">
+        Halaman ${currentPage} dari ${totalPages}
+      </span>
+      ${currentPage < totalPages ? `
+        <button class="btn btn-outline btn-sm" id="btn-next-page">Selanjutnya →</button>
+      ` : ''}
+    </div>`;
+  
+  listEl.innerHTML += paginationHtml;
+  
+  const btnPrev = document.getElementById('btn-prev-page');
+  const btnNext = document.getElementById('btn-next-page');
+  
+  if (btnPrev) {
+    btnPrev.addEventListener('click', () => {
+      renderKasirList(produkList, query, currentPage - 1);
+    });
+  }
+  if (btnNext) {
+    btnNext.addEventListener('click', () => {
+      renderKasirList(produkList, query, currentPage + 1);
+    });
+  }
+}
+
+
+function updateKeranjangUIStatus() {
+  const kasirActionsEl = document.getElementById('kasir-actions');
+  if (!kasirActionsEl) return;
+  
+  if (AppState.cart.length > 0) {
+    kasirActionsEl.style.display = 'block';
+    
+    // ✅ OPTIMIZATION: Update dari local state (tidak perlu API call)
+    document.getElementById('cart-items-count').textContent = jumlahItemKeranjang();
+    document.getElementById('cart-total').textContent = formatRupiah(totalKeranjang());
+    
+    // ✅ Show status indicator
+    const unsynced = AppState.cart.filter(it => !it.synced);
+    const syncedEl = document.getElementById('cart-synced-status');
+    const readyEl = document.getElementById('cart-ready-status');
+    
+    if (unsynced.length > 0) {
+      if (syncedEl) syncedEl.style.display = 'inline';
+      if (readyEl) readyEl.style.display = 'none';
+    } else {
+      if (syncedEl) syncedEl.style.display = 'none';
+      if (readyEl) readyEl.style.display = 'inline';
+    }
+  } else {
+    kasirActionsEl.style.display = 'none';
+  }
+}
+
+
+async function verifyCartItemAsync(kodeObat) {
+  try {
+    const result = await apiPost('verifikasiStokFast', withIdUser({ kodeObat: kodeObat }));
+    const item = AppState.cart.find(x => x.kodeObat === kodeObat);
+    if (!item) return;
+
+    item.synced = true;
+
+    if (result && result.stok !== undefined) {
+      item.stokTersedia = Number(result.stok) || 0;
+      const isi = Math.max(1, Number(item.isiPerSatuan) || 1);
+      const maxQty = Math.floor(item.stokTersedia / isi);
+      if (item.qty > maxQty) {
+        item.qty = maxQty;
+        if (item.qty <= 0) {
+          AppState.cart = AppState.cart.filter(x => x !== item);
+          toast('Stok ' + item.namaObat + ' sudah tidak mencukupi untuk satuan yang dipilih.', 'warn');
+        } else {
+          toast('Stok ' + item.namaObat + ' berubah. Maksimal ' + item.qty + ' ' + (item.namaSatuan || 'unit') + '.', 'warn');
+        }
+      }
+    }
+
+    updateKeranjangUIStatus();
+    renderCartFab();
+    const searchEl = document.getElementById('kasir-search');
+    if (document.getElementById('kasir-list')) {
+      renderKasirList(AppState.produkCache, searchEl ? searchEl.value : '', AppState.kasirCurrentPage || 1);
+    }
+  } catch (e) {
+    // Verifikasi async gagal tidak menghapus item. Checkout tetap melakukan
+    // pemeriksaan final di server.
+    console.warn('Async verify failed:', e);
+  }
+}
+
+function ubahSatuanKeranjang(kodeObat, satuanJual) {
+  const item = AppState.cart.find(x => x.kodeObat === kodeObat);
+  const produk = AppState.produkCache.find(p => p.Kode_Obat === kodeObat);
+  if (!item || !produk) return;
+
+  const pilihan = pilihanPenjualanProduk(produk).find(x => x.key === satuanJual);
+  if (!pilihan) {
+    toast('Satuan penjualan tidak tersedia.', 'warn');
+    return;
+  }
+
+  const stok = Number(produk.Stok) || 0;
+  const maxQty = Math.floor(stok / pilihan.isi);
+  if (maxQty <= 0) {
+    toast('Stok tidak cukup untuk ' + pilihan.satuan + '.', 'warn');
+    return;
+  }
+
+  item.satuanJual = pilihan.key;
+  item.namaSatuan = pilihan.satuan;
+  item.isiPerSatuan = pilihan.isi;
+  item.hargaSatuan = pilihan.harga;
+  item.stokTersedia = stok;
+  item.qty = Math.min(Math.max(1, Number(item.qty) || 1), maxQty);
+  item.synced = false;
+
+  renderKeranjangModalBody();
+  renderCartFab();
+  updateKeranjangUIStatus();
+  setTimeout(() => verifyCartItemAsync(kodeObat), 0);
+
+  const searchEl = document.getElementById('kasir-search');
+  if (document.getElementById('kasir-list')) {
+    renderKasirList(AppState.produkCache, searchEl ? searchEl.value : '', AppState.kasirCurrentPage || 1);
+  }
+}
+
+async function verifikasiStokBeforeCheckout(cart) {
+  try {
+    const result = await apiPost('verifikasiStokFast', withIdUser({
+      items: cart.map(it => ({
+        kodeObat: it.kodeObat,
+        qty: Number(it.qty || 0) * Math.max(1, Number(it.isiPerSatuan) || 1)
+      }))
+    }));
+
+    return result && result.valid
+      ? result
+      : { valid: false, error: (result && result.error) || 'Verifikasi gagal' };
+  } catch (e) {
+    console.warn('Stok verification error:', e);
+    return { valid: null, error: 'Koneksi error, akan diverifikasi saat checkout' };
+  }
 }
 
 function tampilkanStrukRingkas(hasil) {
