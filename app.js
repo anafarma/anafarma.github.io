@@ -667,7 +667,7 @@ function renderKasirList(produkList, query, page = 1) {
     <div class="list-item" data-kode-obat="${p.Kode_Obat}">
       <div class="li-main">
         <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-        <div class="li-sub">📍 ${escapeHtml(p.Lokasi_Rak || '-')} • Stok: ${p.Stok} ${p.Satuan || ''} • ${formatRupiah(p.Harga_Jual)}</div>
+        <div class="li-sub">📍 ${escapeHtml(getNamaLokasiRak(p.Lokasi_Rak))} • ${formatRupiah(p.Harga_Jual)}</div>
       </div>
       <div class="li-right">
         ${habis ? '<span class="pill pill-danger">Habis</span>' :
@@ -755,7 +755,7 @@ SCREEN_RENDERERS.kasir = async function (root) {
       </div>
     </div>`;
   
-  const produk = await ambilProduk();
+  const [produk] = await Promise.all([ambilProduk(), ambilLokasiRak()]);
   const searchInput = document.getElementById('kasir-search');
   
   // ✅ OPTIMIZATION: Render page 1 langsung (instant)
@@ -1151,7 +1151,7 @@ function renderStokList(produkList, query, filter) {
     <div class="list-item" data-detail="${p.Kode_Obat}">
       <div class="li-main">
         <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-        <div class="li-sub">📍 ${escapeHtml(p.Lokasi_Rak || '-')} • ${formatRupiah(p.Harga_Jual)}</div>
+        <div class="li-sub">📍 ${escapeHtml(getNamaLokasiRak(p.Lokasi_Rak))} • ${formatRupiah(p.Harga_Jual)}</div>
       </div>
       <div class="li-right">
         <div class="li-value">${p.Stok} ${escapeHtml(p.Satuan || '')}</div>
@@ -1180,7 +1180,7 @@ SCREEN_RENDERERS.stok = async function (root) {
       <button class="btn btn-primary" id="btn-tambah-produk" style="margin-bottom:12px;">+ Tambah Produk Baru</button>
       <div id="stok-list"></div>
     </div>`;
-  const produk = await ambilProduk(true);
+  const [produk] = await Promise.all([ambilProduk(true), ambilLokasiRak()]);
   let filterAktif = 'semua';
   renderStokList(produk, '', filterAktif);
   const searchInput = document.getElementById('stok-search');
@@ -1318,6 +1318,13 @@ const LokasiRakCache = {
   cacheDuration: 60000 // 1 menit
 };
  
+function getNamaLokasiRak(idLokasi) {
+  if (!idLokasi) return '-';
+  const id = String(idLokasi).trim();
+  const lokasi = (LokasiRakCache.data || []).find(x => String(x.ID_Lokasi || '').trim() === id);
+  return lokasi ? (lokasi.Nama_Display || lokasi.ID_Lokasi || id) : id;
+}
+
 async function ambilLokasiRak() {
   const now = Date.now();
   if (LokasiRakCache.data.length && (now - LokasiRakCache.lastFetch) < LokasiRakCache.cacheDuration) {
