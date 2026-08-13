@@ -667,7 +667,7 @@ function renderKasirList(produkList, query, page = 1) {
     <div class="list-item" data-kode-obat="${p.Kode_Obat}">
       <div class="li-main">
         <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-        <div class="li-sub">Stok: ${p.Stok} ${p.Satuan || ''} • ${formatRupiah(p.Harga_Jual)}</div>
+        <div class="li-sub">📍 ${escapeHtml(p.Lokasi_Rak || '-')} • Stok: ${p.Stok} ${p.Satuan || ''} • ${formatRupiah(p.Harga_Jual)}</div>
       </div>
       <div class="li-right">
         ${habis ? '<span class="pill pill-danger">Habis</span>' :
@@ -1151,7 +1151,7 @@ function renderStokList(produkList, query, filter) {
     <div class="list-item" data-detail="${p.Kode_Obat}">
       <div class="li-main">
         <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-        <div class="li-sub">${escapeHtml(p.Kategori || '-')} • ${formatRupiah(p.Harga_Jual)}</div>
+        <div class="li-sub">📍 ${escapeHtml(p.Lokasi_Rak || '-')} • ${formatRupiah(p.Harga_Jual)}</div>
       </div>
       <div class="li-right">
         <div class="li-value">${p.Stok} ${escapeHtml(p.Satuan || '')}</div>
