@@ -868,26 +868,36 @@ function renderKasirList(produkList, query, page = 1) {
       </div>`;
   }).join('');
 
-  // Event pilihan penjualan. Delegasi tidak digunakan agar setiap render
-  // menghasilkan handler baru yang pasti menunjuk produk yang benar.
-  listEl.querySelectorAll('[data-pilihan-kode]').forEach(btn => {
-    btn.addEventListener('click', e => {
+  // EVENT TRANSAKSI — event delegation.
+  // Handler dipasang pada container, bukan pada setiap tombol.
+  // Ini membuat tombol tetap aktif walaupun daftar dirender ulang setelah
+  // klik, pencarian, pergantian halaman, atau perubahan quantity.
+  listEl.onclick = function(e) {
+    const satuanBtn = e.target.closest('[data-pilihan-kode]');
+    if (satuanBtn && listEl.contains(satuanBtn)) {
       e.preventDefault();
       e.stopPropagation();
-      const kode = btn.dataset.pilihanKode;
-      const satuan = btn.dataset.pilihanSatuan;
-      const produk = source.find(x => String(x.Kode_Obat) === String(kode));
-      if (produk) tambahKeKeranjang(produk, satuan);
-    });
-  });
+      if (satuanBtn.disabled) return;
 
-  listEl.querySelectorAll('.qty-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
+      const kode = satuanBtn.getAttribute('data-pilihan-kode');
+      const satuan = satuanBtn.getAttribute('data-pilihan-satuan');
+      const produk = source.find(x => String(x.Kode_Obat) === String(kode));
+      if (!produk) {
+        toast('Data obat tidak ditemukan. Silakan segarkan daftar obat.', 'warn');
+        return;
+      }
+      tambahKeKeranjang(produk, satuan);
+      return;
+    }
+
+    const qtyBtn = e.target.closest('.qty-btn');
+    if (qtyBtn && listEl.contains(qtyBtn)) {
       e.preventDefault();
       e.stopPropagation();
-      ubahQtyKeranjang(btn.dataset.kodeObat, btn.classList.contains('qty-plus') ? 1 : -1);
-    });
-  });
+      const kode = qtyBtn.getAttribute('data-kode-obat');
+      ubahQtyKeranjang(kode, qtyBtn.classList.contains('qty-plus') ? 1 : -1);
+    }
+  };
 
   if (totalPages > 1) renderPaginationControls(page, totalPages, query, source);
   updateKeranjangUIStatus();
@@ -2782,3 +2792,23 @@ async function initAplikasi() {
 }
 
 document.addEventListener('DOMContentLoaded', initAplikasi);
+
+// Fallback global handler transaksi. Ini sengaja dibuat satu kali agar
+// tombol pilihan penjualan tetap bekerja walaupun renderer kasir dipanggil
+// ulang oleh cache/pencarian/update stok.
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest && e.target.closest('#kasir-list [data-pilihan-kode]');
+  if (!btn) return;
+  if (btn.disabled) return;
+  if (btn.dataset.txHandled === '1') return;
+  btn.dataset.txHandled = '1';
+  const kode = btn.getAttribute('data-pilihan-kode');
+  const satuan = btn.getAttribute('data-pilihan-satuan');
+  const produk = AppState.produkCache.find(x => String(x.Kode_Obat) === String(kode));
+  if (produk) {
+    e.preventDefault();
+    e.stopPropagation();
+    tambahKeKeranjang(produk, satuan);
+  }
+  setTimeout(() => { try { delete btn.dataset.txHandled; } catch (_) {} }, 0);
+}, true);
