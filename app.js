@@ -33,6 +33,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbyeJb7dYKaKzpnlU0xnEif4
 const STORAGE_KEY = 'anafarma_sesi_v1';
 const AUTO_LOGOUT_MS = 20 * 60 * 1000; // 20 menit, bisa ditimpa oleh Pengaturan.auto_logout_menit
 const PRODUK_CACHE_MS = 60 * 60 * 1000; // 1 hour (was 30s) — integrated optimization
+const APOTEK_POS_VERSION = '2026-08-14-POS-FIX-01';
 
 // ---------------------------------------------------------------------
 // STATE GLOBAL
@@ -774,6 +775,15 @@ function renderCartFab() {
   updateKeranjangUIStatus();
 }
 
+function namaLokasiRakProduk(p) {
+  if (!p) return '-';
+  const raw = String(p.Lokasi_Rak ?? p.LokasiRak ?? p.Lokasi ?? p.Nama_Lokasi ?? '').trim();
+  if (!raw) return '-';
+  const list = Array.isArray(AppState.lokasiCache) ? AppState.lokasiCache : [];
+  const hit = list.find(x => String(x.ID_Lokasi ?? '') === raw);
+  return hit ? String(hit.Nama_Display || hit.ID_Lokasi || raw) : raw;
+}
+
 function renderKasirList(produkList, query, page = 1) {
   const listEl = document.getElementById('kasir-list');
   if (!listEl) return;
@@ -845,9 +855,10 @@ function renderKasirList(produkList, query, page = 1) {
       <div class="list-item" data-kode-obat="${escapeHtml(p.Kode_Obat)}">
         <div class="li-main">
           <div class="li-title">${escapeHtml(p.Nama_Obat)}</div>
-          <div class="li-sub">📍 ${escapeHtml(namaLokasiRakProduk(p))} • Stok: ${stok} ${escapeHtml(p.Satuan || '')}</div>
-          <div style="margin-top:7px;">
-            <div style="font-size:11.5px;font-weight:700;color:var(--text-dim);margin-bottom:5px;">Pilih penjualan</div>
+          <div class="li-sub">📍 ${escapeHtml(namaLokasiRakProduk(p))} • ${formatRupiah((item && item.hargaSatuan) || (pilihan[0] && pilihan[0].harga) || p.Harga_Jual)}</div>
+          <div style="font-size:11.5px;color:var(--text-faint);margin-top:2px;">Stok tersedia: ${stok} ${escapeHtml(p.Satuan || '')}</div>
+          <div style="margin-top:8px;">
+            <div style="font-size:11.5px;font-weight:700;color:var(--text-dim);margin-bottom:6px;">Pilihan penjualan</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">${pilihanHtml}</div>
           </div>
         </div>
