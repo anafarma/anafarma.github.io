@@ -691,8 +691,7 @@ function renderKasirList(produkList, query, page = 1) {
       if (produk) {
         tambahKeKeranjang(produk);
         // ✅ OPTIMIZATION: UI update instant (no wait for server)
-        // ✅ FIX: Gunakan AppState values, bukan local scope variables
-        renderKasirList(AppState.produkCache, AppState.kasirCurrentQuery, AppState.kasirCurrentPage);
+        renderKasirList(produkList, query, page);
       }
     });
   });
@@ -713,8 +712,7 @@ function renderKasirList(produkList, query, page = 1) {
           item.synced = false; // Mark as pending verification
           
           // ✅ INSTANT UPDATE UI
-          // ✅ FIX: Gunakan AppState values untuk proper re-render
-          renderKasirList(AppState.produkCache, AppState.kasirCurrentQuery, AppState.kasirCurrentPage);
+          renderKasirList(produkList, query, page);
           renderCartFab();
           updateKeranjangUIStatus();
           
