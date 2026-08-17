@@ -1,62 +1,212 @@
 /**
- * APOTEK ANA FARMA — Service Worker
- * Strategi: cache "app shell" (HTML/CSS/JS/ikon) supaya aplikasi tetap
- * bisa dibuka walau sinyal HP jelek, TAPI semua data (produk, transaksi,
- * dsb.) SELALU diambil langsung dari server (network-only) supaya kasir
- * tidak pernah melihat stok/harga basi. Naikkan CACHE_VERSION setiap kali
- * index.html/app.js diperbarui supaya HP pengguna otomatis mengambil versi baru.
+ * ANA FARMA — Service Worker
+ * ONLINE / OFFLINE
  */
-const CACHE_VERSION = 'ana-farma-v14';
+
+const CACHE_VERSION = 'ana-farma-v15';
+
 const APP_SHELL = [
+  './',
   './index.html',
   './app.js',
+  './offline-sync.js',
+  './logo_data.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL)).catch(() => {})
-  );
-  self.skipWaiting();
-});
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
-    )
-  );
-  self.clients.claim();
-});
+self.addEventListener(
+  'install',
+  function (event) {
 
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+    event.waitUntil(
 
-  // Jangan pernah cache panggilan ke Apps Script (selalu data terbaru).
-  if (url.hostname.includes('script.google.com') || url.hostname.includes('script.googleusercontent.com')) {
-    event.respondWith(fetch(event.request).catch(() =>
-      new Response(JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }), {
-        headers: { 'Content-Type': 'application/json' }
-      })
-    ));
-    return;
-  }
+      caches
+        .open(CACHE_VERSION)
+        .then(function (cache) {
 
-  // App shell: cache-first, lalu perbarui cache di latar belakang.
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const networkFetch = fetch(event.request)
-        .then((response) => {
-          if (response && response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
+          return cache.addAll(
+            APP_SHELL
+          );
+
         })
-        .catch(() => cached);
-      return cached || networkFetch;
-    })
-  );
-});
+        .catch(function () {})
+
+    );
+
+    self.skipWaiting();
+
+  }
+);
+
+
+self.addEventListener(
+  'activate',
+  function (event) {
+
+    event.waitUntil(
+
+      caches
+        .keys()
+        .then(function (keys) {
+
+          return Promise.all(
+
+            keys
+              .filter(function (key) {
+
+                return (
+                  key !==
+                  CACHE_VERSION
+                );
+
+              })
+              .map(function (key) {
+
+                return caches.delete(
+                  key
+                );
+
+              })
+
+          );
+
+        })
+
+    );
+
+    self.clients.claim();
+
+  }
+);
+
+
+self.addEventListener(
+  'fetch',
+  function (event) {
+
+    const request =
+      event.request;
+
+    const url =
+      new URL(
+        request.url
+      );
+
+
+    /*
+     * Apps Script tidak dicache.
+     */
+    if (
+      url.hostname.includes(
+        'script.google.com'
+      ) ||
+      url.hostname.includes(
+        'script.googleusercontent.com'
+      )
+    ) {
+
+      event.respondWith(
+
+        fetch(request)
+          .catch(function () {
+
+            return new Response(
+
+              JSON.stringify({
+                ok: false,
+                error:
+                  'Tidak ada koneksi internet.'
+              }),
+
+              {
+                status: 503,
+
+                headers: {
+                  'Content-Type':
+                    'application/json'
+                }
+
+              }
+
+            );
+
+          })
+
+      );
+
+      return;
+
+    }
+
+
+    /*
+     * Hanya GET yang dicache.
+     */
+    if (
+      request.method !==
+      'GET'
+    ) {
+
+      return;
+
+    }
+
+
+    event.respondWith(
+
+      caches.match(
+        request
+      )
+      .then(function (cached) {
+
+        const network =
+          fetch(request)
+            .then(function (response) {
+
+              if (
+                response &&
+                response.ok
+              ) {
+
+                const copy =
+                  response.clone();
+
+                caches
+                  .open(
+                    CACHE_VERSION
+                  )
+                  .then(function (cache) {
+
+                    cache.put(
+                      request,
+                      copy
+                    );
+
+                  });
+
+              }
+
+              return response;
+
+            })
+            .catch(function () {
+
+              return cached;
+
+            });
+
+
+        return (
+          cached ||
+          network
+        );
+
+      })
+
+    );
+
+  }
+);
