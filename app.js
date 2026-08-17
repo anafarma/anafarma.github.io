@@ -27,7 +27,7 @@
  */
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-const API_URL = 'https://script.google.com/macros/s/AKfycbyeJb7dYKaKzpnlU0xnEif42h7i2PO4XyCFUDXkkZmXZgNmfPqw0HIrowsFm9LzxXP9/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec';
 // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 const STORAGE_KEY = 'anafarma_sesi_v1';
