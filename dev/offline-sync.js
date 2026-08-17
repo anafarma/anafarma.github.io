@@ -785,161 +785,149 @@
      * Wrapper utama.
      */
     window.apiPost =
-      async function (
-        action,
-        data
-      ) {
+  async function (
+    action,
+    data
+  ) {
 
+    /*
+     * ============================================================
+     * ONLINE
+     * ============================================================
+     *
+     * Perilaku aplikasi lama tetap dipertahankan.
+     */
+    if (navigator.onLine) {
+
+      try {
+
+        return await originalApiPost(
+          action,
+          data
+        );
+
+      } catch (error) {
 
         /*
-         * ONLINE:
-         *
-         * Gunakan apiPost asli.
-         * Tidak mengubah perilaku aplikasi existing.
+         * Jika koneksi putus saat createTransaksi,
+         * simpan payload yang SAMA ke antrean.
          */
         if (
-          navigator.onLine
+          action === 'createTransaksi'
         ) {
 
-          try {
-
-            return await originalApiPost(
-              action,
-              data
+          const message =
+            String(
+              error &&
+              error.message ||
+              error
             );
 
-          } catch (error) {
+          if (
+            /tidak bisa terhubung|koneksi|network|fetch/i
+              .test(message)
+          ) {
 
-            /*
-             * Jika koneksi sebenarnya putus
-             * tepat ketika request dilakukan,
-             * hanya createTransaksi yang boleh
-             * dimasukkan ke queue.
-             */
-            if (
-              action ===
-              'createTransaksi'
-            ) {
+            const queued =
+              await queueTransaction(
+                data
+              );
 
-              const message =
-                String(
-                  error &&
-                  error.message ||
-                  error
-                );
+            showMessage(
+              'Koneksi terputus. Transaksi disimpan di perangkat dan menunggu sinkronisasi.',
+              'warn'
+            );
 
+            return {
 
-              if (
-                /tidak bisa terhubung|koneksi|network|fetch/i
-                  .test(message)
-              ) {
+              offlinePending:
+                true,
 
-                const queued =
-                  await queueTransaction(
-                    data
-                  );
+              requestId:
+                queued.requestId,
 
+              status:
+                STATUS_PENDING,
 
-                showMessage(
-                  'Koneksi terputus. Transaksi disimpan di perangkat dan menunggu sinkronisasi.',
-                  'warn'
-                );
+              message:
+                'Transaksi menunggu sinkronisasi.'
 
-
-                return {
-
-                  offlinePending:
-                    true,
-
-                  requestId:
-                    queued.requestId,
-
-                  status:
-                    STATUS_PENDING,
-
-                  message:
-                    'Transaksi menunggu sinkronisasi.'
-
-                };
-
-              }
-
-            }
-
-
-            throw error;
+            };
 
           }
 
         }
 
-
-        /*
-         * OFFLINE:
-         *
-         * Hanya transaksi yang boleh diantrikan.
-         */
-        if (
-          action ===
-          'createTransaksi'
-        ) {
-
-          const queued =
-            await queueTransaction(
-              data
-            );
-
-
-          showMessage(
-            'OFFLINE. Transaksi disimpan aman di perangkat dan akan disinkronkan saat internet kembali.',
-            'warn'
-          );
-
-
-          return {
-
-            offlinePending:
-              true,
-
-            requestId:
-              queued.requestId,
-
-            status:
-              STATUS_PENDING,
-
-            message:
-              'Transaksi menunggu koneksi internet.'
-
-          };
-
-        }
-
-
-        /*
-         * Operasi lain tidak boleh dilakukan
-         * secara offline pada tahap ini.
-         */
-        const error =
-          new Error(
-            'OFFLINE_WRITE_BLOCKED: ' +
-            'Operasi ini membutuhkan koneksi internet.'
-          );
-
-        error.code =
-          'OFFLINE_WRITE_BLOCKED';
-
         throw error;
+
+      }
+
+    }
+
+
+    /*
+     * ============================================================
+     * OFFLINE
+     * ============================================================
+     *
+     * Hanya createTransaksi yang boleh masuk antrean.
+     */
+    if (
+      action === 'createTransaksi'
+    ) {
+
+      const queued =
+        await queueTransaction(
+          data
+        );
+
+      showMessage(
+        'OFFLINE. Transaksi disimpan aman di perangkat dan akan disinkronkan saat internet kembali.',
+        'warn'
+      );
+
+      return {
+
+        offlinePending:
+          true,
+
+        requestId:
+          queued.requestId,
+
+        status:
+          STATUS_PENDING,
+
+        message:
+          'Transaksi menunggu koneksi internet.'
 
       };
 
-
-    window.__anaFarmaOfflineAdapterInstalled =
-      true;
+    }
 
 
-    return true;
+    /*
+     * ============================================================
+     * OPERASI LAIN SAAT OFFLINE
+     * ============================================================
+     */
+    const error =
+      new Error(
+        'OFFLINE_WRITE_BLOCKED: ' +
+        'Operasi ini membutuhkan koneksi internet.'
+      );
 
-  }
+    error.code =
+      'OFFLINE_WRITE_BLOCKED';
+
+    throw error;
+
+  };
+
+
+window.__anaFarmaOfflineAdapterInstalled =
+  true;
+
+return true;
 
 
   // ================================================================
