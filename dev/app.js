@@ -2837,24 +2837,33 @@ async function initAplikasi() {
   }, PRODUK_CACHE_MS);
 }
 
-document.addEventListener('DOMContentLoaded', initAplikasi);
-
-// Fallback global handler transaksi. Ini sengaja dibuat satu kali agar
-// tombol pilihan penjualan tetap bekerja walaupun renderer kasir dipanggil
-// ulang oleh cache/pencarian/update stok.
 document.addEventListener('click', function(e) {
-  const btn = e.target.closest && e.target.closest('#kasir-list [data-pilihan-kode]');
+  const btn = e.target.closest &&
+    e.target.closest('#kasir-list [data-pilihan-kode]');
+
   if (!btn) return;
   if (btn.disabled) return;
   if (btn.dataset.txHandled === '1') return;
+
   btn.dataset.txHandled = '1';
+
   const kode = btn.getAttribute('data-pilihan-kode');
   const satuan = btn.getAttribute('data-pilihan-satuan');
-  const produk = AppState.produkCache.find(x => String(x.Kode_Obat) === String(kode));
+
+  const produk = AppState.produkCache.find(
+    x => String(x.Kode_Obat) === String(kode)
+  );
+
   if (produk) {
     e.preventDefault();
     e.stopPropagation();
+
     tambahKeKeranjang(produk, satuan);
   }
-  setTimeout(() => { try { delete btn.dataset.txHandled; } catch (_) {} }, 0);
+
+  setTimeout(() => {
+    try {
+      delete btn.dataset.txHandled;
+    } catch (_) {}
+  }, 0);
 }, true);
