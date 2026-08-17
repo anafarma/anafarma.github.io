@@ -1092,44 +1092,90 @@ async function bukaCheckoutModal() {
         btn.textContent = 'Memproses...';
         try {
           // ✅ OPTIMIZATION: Batch semua item dalam 1 request
-          const hasil = await apiPost('createTransaksi', withIdUser({
-            items: AppState.cart.map(it => {
-              const isi = Math.max(1, Number(it.isiPerSatuan) || 1);
-              const qtyStok = Number(it.qty || 0) * isi;
-              // Backend lama menyimpan stok dalam satuan eceran.
-              // Karena itu Box/Strip dikonversi ke satuan stok di sini,
-              // sedangkan harga dibagi isi agar total penjualan tetap sama.
-              return {
-                kodeObat: it.kodeObat,
-                qty: qtyStok,
-                hargaSatuan: Number(it.hargaSatuan || 0) / isi,
-                satuanJual: it.satuanJual,
-                namaSatuan: it.namaSatuan || ''
-              };
-            }),
-            idPelanggan: root.querySelector('#chk-pelanggan').value || '',
-            diskon: Number(diskonEl.value || 0),
-            pajak: 0,
-            metodeBayar: root.querySelector('#chk-metode').value,
-            bayar: Number(bayarEl.value || 0)
-          }));
-          tutupModal();
-          AppState.cart = [];
-          invalidasiCacheProduk();
-          renderCartFab();
-          updateKeranjangUIStatus();
-          tampilkanStrukRingkas(hasil);
-          navigasiKe('kasir', false);
-        } catch (err) {
-          tampilkanError(err);
-          btn.disabled = false;
-          btn.textContent = 'Proses & Simpan Transaksi';
-        }
-      });
-    }
-  });
+const payloadTransaksi = withIdUser({
+  items: AppState.cart.map(it => {
+    const isi = Math.max(1, Number(it.isiPerSatuan) || 1);
+    const qtyStok = Number(it.qty || 0) * isi;
+
+    // Backend lama menyimpan stok dalam satuan eceran.
+    // Karena itu Box/Strip dikonversi ke satuan stok di sini,
+    // sedangkan harga dibagi isi agar total penjualan tetap sama.
+    return {
+      kodeObat: it.kodeObat,
+      qty: qtyStok,
+      hargaSatuan: Number(it.hargaSatuan || 0) / isi,
+      satuanJual: it.satuanJual,
+      namaSatuan: it.namaSatuan || ''
+    };
+  }),
+  idPelanggan:
+    root.querySelector('#chk-pelanggan').value || '',
+  diskon:
+    Number(diskonEl.value || 0),
+  pajak: 0,
+  metodeBayar:
+    root.querySelector('#chk-metode').value,
+  bayar:
+    Number(bayarEl.value || 0)
+});
+
+const hasil =
+  await apiPost(
+    'createTransaksi',
+    payloadTransaksi
+  );
+
+/*
+ * ============================================================
+ * OFFLINE
+ * ============================================================
+ *
+ * Transaksi sudah masuk IndexedDB, tetapi BELUM dibuat
+ * sebagai transaksi server.
+ *
+ * Jangan kosongkan keranjang.
+ * Jangan tampilkan struk transaksi server.
+ */
+if (
+  hasil &&
+  hasil.offlinePending === true
+) {
+
+  tutupModal();
+
+  tampilkanError(
+    'Internet sedang offline. Transaksi disimpan di perangkat dan akan disinkronkan otomatis ketika internet kembali.'
+  );
+
+  btn.disabled = false;
+  btn.textContent =
+    'Proses & Simpan Transaksi';
+
+  return;
 }
 
+
+/*
+ * ============================================================
+ * ONLINE / SERVER BERHASIL
+ * ============================================================
+ *
+ * Hanya pada kondisi ini keranjang boleh dikosongkan.
+ */
+tutupModal();
+
+AppState.cart = [];
+
+invalidasiCacheProduk();
+renderCartFab();
+updateKeranjangUIStatus();
+
+tampilkanStrukRingkas(hasil);
+
+navigasiKe(
+  'kasir',
+  false
+);
 
 function renderPaginationControls(currentPage, totalPages, query, produkList) {
   const listEl = document.getElementById('kasir-list');
