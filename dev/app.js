@@ -89,20 +89,40 @@ async function apiGet(action, params) {
 }
 
 async function apiPost(action, data) {
-  if (isApiBelumDikonfigurasi()) throw new Error('KONFIGURASI_BELUM_SELESAI');
-  const payload = { action: action, data: data || {}, requestId: uuidKecil() };
+  if (isApiBelumDikonfigurasi()) {
+    throw new Error('KONFIGURASI_BELUM_SELESAI');
+  }
+
+  const payload = {
+    action: action,
+    data: data || {},
+    requestId: uuidKecil()
+  };
+
   let res;
+
   try {
     res = await fetch(API_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8'
+      },
       body: JSON.stringify(payload)
     });
   } catch (netErr) {
-    throw new Error('Tidak bisa terhubung ke server. Periksa koneksi internet Anda.');
+    throw new Error(
+      'Tidak bisa terhubung ke server. Periksa koneksi internet Anda.'
+    );
   }
+
   const json = await res.json();
-  if (!json.ok) throw new Error(json.error || 'Terjadi kesalahan di server.');
+
+  if (!json.ok) {
+    throw new Error(
+      json.error || 'Terjadi kesalahan di server.'
+    );
+  }
+
   return json.data;
 }
 
