@@ -1,6 +1,6 @@
 /**
- * ANA FARMA — Service Worker
- * ONLINE / OFFLINE
+ * APOTEK ANA FARMA — Service Worker
+ * OFFLINE APP SHELL
  */
 
 const CACHE_VERSION = 'ana-farma-v15';
@@ -9,204 +9,135 @@ const APP_SHELL = [
   './',
   './index.html',
   './app.js',
-  './offline-sync.js',
   './logo_data.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
 ];
 
+// ================================================================
+// INSTALL
+// ================================================================
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_VERSION)
+      .then(cache => cache.addAll(APP_SHELL))
+      .catch(error => {
+        console.error('[SW INSTALL]', error);
+      })
+  );
 
-self.addEventListener(
-  'install',
-  function (event) {
+  self.skipWaiting();
+});
 
-    event.waitUntil(
-
-      caches
-        .open(CACHE_VERSION)
-        .then(function (cache) {
-
-          return cache.addAll(
-            APP_SHELL
-          );
-
-        })
-        .catch(function () {})
-
-    );
-
-    self.skipWaiting();
-
-  }
-);
-
-
-self.addEventListener(
-  'activate',
-  function (event) {
-
-    event.waitUntil(
-
-      caches
-        .keys()
-        .then(function (keys) {
-
-          return Promise.all(
-
-            keys
-              .filter(function (key) {
-
-                return (
-                  key !==
-                  CACHE_VERSION
-                );
-
-              })
-              .map(function (key) {
-
-                return caches.delete(
-                  key
-                );
-
-              })
-
-          );
-
-        })
-
-    );
-
-    self.clients.claim();
-
-  }
-);
-
-
-self.addEventListener(
-  'fetch',
-  function (event) {
-
-    const request =
-      event.request;
-
-    const url =
-      new URL(
-        request.url
+// ================================================================
+// ACTIVATE
+// ================================================================
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys().then(keys => {
+      return Promise.all(
+        keys
+          .filter(key => key !== CACHE_VERSION)
+          .map(key => caches.delete(key))
       );
+    })
+  );
 
+  self.clients.claim();
+});
 
-    /*
-     * Apps Script tidak dicache.
-     */
-    if (
-      url.hostname.includes(
-        'script.google.com'
-      ) ||
-      url.hostname.includes(
-        'script.googleusercontent.com'
-      )
-    ) {
+// ================================================================
+// FETCH
+// ================================================================
+self.addEventListener('fetch', event => {
+  const request = event.request;
+  const url = new URL(request.url);
 
-      event.respondWith(
-
-        fetch(request)
-          .catch(function () {
-
-            return new Response(
-
-              JSON.stringify({
-                ok: false,
-                error:
-                  'Tidak ada koneksi internet.'
-              }),
-
-              {
-                status: 503,
-
-                headers: {
-                  'Content-Type':
-                    'application/json'
-                }
-
-              }
-
-            );
-
-          })
-
-      );
-
-      return;
-
-    }
-
-
-    /*
-     * Hanya GET yang dicache.
-     */
-    if (
-      request.method !==
-      'GET'
-    ) {
-
-      return;
-
-    }
-
-
+  // --------------------------------------------------------------
+  // Apps Script API
+  // Jangan cache data API di Service Worker.
+  // IndexedDB yang menangani cache data aplikasi.
+  // --------------------------------------------------------------
+  if (
+    url.hostname.includes('script.google.com') ||
+    url.hostname.includes('script.googleusercontent.com')
+  ) {
     event.respondWith(
+      fetch(request).catch(() => {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error: 'Tidak ada koneksi internet.'
+          }),
+          {
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+      })
+    );
 
-      caches.match(
-        request
-      )
-      .then(function (cached) {
+    return;
+  }
 
-        const network =
-          fetch(request)
-            .then(function (response) {
+  // --------------------------------------------------------------
+  // NAVIGATION
+  // Kalau user membuka /dev/ atau halaman lain saat offline,
+  // berikan index.html dari cache.
+  // --------------------------------------------------------------
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          const clone = response.clone();
 
-              if (
-                response &&
-                response.ok
-              ) {
-
-                const copy =
-                  response.clone();
-
-                caches
-                  .open(
-                    CACHE_VERSION
-                  )
-                  .then(function (cache) {
-
-                    cache.put(
-                      request,
-                      copy
-                    );
-
-                  });
-
-              }
-
-              return response;
-
-            })
-            .catch(function () {
-
-              return cached;
-
+          caches.open(CACHE_VERSION)
+            .then(cache => {
+              cache.put('./index.html', clone);
             });
 
-
-        return (
-          cached ||
-          network
-        );
-
-      })
-
+          return response;
+        })
+        .catch(() => {
+          return caches.match('./index.html');
+        })
     );
 
+    return;
   }
-);
+
+  // --------------------------------------------------------------
+  // FILE APP
+  // Abaikan query string seperti:
+  // app.js?v=20260814-POS-FIX-02
+  // --------------------------------------------------------------
+  event.respondWith(
+    caches.match(request, {
+      ignoreSearch: true
+    })
+    .then(cached => {
+      if (cached) {
+        return cached;
+      }
+
+      return fetch(request)
+        .then(response => {
+          if (response && response.ok) {
+            const clone = response.clone();
+
+            caches.open(CACHE_VERSION)
+              .then(cache => {
+                cache.put(request, clone);
+              });
+          }
+
+          return response;
+        });
+    })
+    .catch(() => {
+      return caches.match('./index.html');
+    })
+  );
+});
