@@ -3,7 +3,7 @@
  * OFFLINE APP SHELL
  */
 
-const CACHE_VERSION = 'ana-farma-v15';
+const CACHE_VERSION = 'ana-farma-v16';
 
 const APP_SHELL = [
   './',
@@ -22,12 +22,8 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_VERSION)
       .then(cache => cache.addAll(APP_SHELL))
-      .catch(error => {
-        console.error('[SW INSTALL]', error);
-      })
+      .then(() => self.skipWaiting())
   );
-
-  self.skipWaiting();
 });
 
 // ================================================================
@@ -35,16 +31,16 @@ self.addEventListener('install', event => {
 // ================================================================
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(keys => {
-      return Promise.all(
-        keys
-          .filter(key => key !== CACHE_VERSION)
-          .map(key => caches.delete(key))
-      );
-    })
+    caches.keys()
+      .then(keys =>
+        Promise.all(
+          keys
+            .filter(key => key !== CACHE_VERSION)
+            .map(key => caches.delete(key))
+        )
+      )
+      .then(() => self.clients.claim())
   );
-
-  self.clients.claim();
 });
 
 // ================================================================
@@ -56,27 +52,26 @@ self.addEventListener('fetch', event => {
 
   // --------------------------------------------------------------
   // Apps Script API
-  // Jangan cache data API di Service Worker.
-  // IndexedDB yang menangani cache data aplikasi.
   // --------------------------------------------------------------
   if (
     url.hostname.includes('script.google.com') ||
     url.hostname.includes('script.googleusercontent.com')
   ) {
     event.respondWith(
-      fetch(request).catch(() => {
-        return new Response(
+      fetch(request).catch(() =>
+        new Response(
           JSON.stringify({
             ok: false,
             error: 'Tidak ada koneksi internet.'
           }),
           {
+            status: 503,
             headers: {
               'Content-Type': 'application/json'
             }
           }
-        );
-      })
+        )
+      )
     );
 
     return;
@@ -84,8 +79,6 @@ self.addEventListener('fetch', event => {
 
   // --------------------------------------------------------------
   // NAVIGATION
-  // Kalau user membuka /dev/ atau halaman lain saat offline,
-  // berikan index.html dari cache.
   // --------------------------------------------------------------
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -100,18 +93,16 @@ self.addEventListener('fetch', event => {
 
           return response;
         })
-        .catch(() => {
-          return caches.match('./index.html');
-        })
+        .catch(() =>
+          caches.match('./index.html')
+        )
     );
 
     return;
   }
 
   // --------------------------------------------------------------
-  // FILE APP
-  // Abaikan query string seperti:
-  // app.js?v=20260814-POS-FIX-02
+  // APP FILES
   // --------------------------------------------------------------
   event.respondWith(
     caches.match(request, {
@@ -136,8 +127,8 @@ self.addEventListener('fetch', event => {
           return response;
         });
     })
-    .catch(() => {
-      return caches.match('./index.html');
-    })
+    .catch(() =>
+      caches.match('./index.html')
+    )
   );
 });
