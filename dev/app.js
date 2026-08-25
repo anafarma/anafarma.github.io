@@ -1036,10 +1036,31 @@ async function ambilProduk(forceRefresh = false) {
       : null
   };
 
+  // OFFLINE: baca cache produk berdasarkan key API yang sama.
+  if (!AppState.isOnline) {
+    const cached = await bacaCache(
+      'getProduk',
+      params,
+      Infinity
+    );
+
+    if (Array.isArray(cached) && cached.length > 0) {
+      AppState.produkCache = cached;
+      AppState.produkCacheAt = now;
+      return AppState.produkCache;
+    }
+
+    throw new Error(
+      'OFFLINE_DATA_TIDAK_TERSEDIA: Data produk belum tersedia di perangkat.'
+    );
+  }
+
+  // ONLINE: ambil dari server melalui apiGet(), sekaligus menyimpan cache.
   const data = await apiGet(
     'getProduk',
     params,
     {
+      cache: true,
       maxAge: PRODUK_CACHE_MS
     }
   );
@@ -1054,10 +1075,28 @@ async function ambilProduk(forceRefresh = false) {
   return AppState.produkCache;
 }
 
-function invalidasiCacheProduk() {
-  AppState.produkCacheAt = 0;
-}
+async function cekCacheProdukOffline() {
+  const params = {
+    idUser: AppState.user
+      ? AppState.user.idUser
+      : null
+  };
 
+  const cached = await bacaCache(
+    'getProduk',
+    params,
+    Infinity
+  );
+
+  return {
+    online: AppState.isOnline,
+    idUser: params.idUser,
+    jumlahProduk: Array.isArray(cached)
+      ? cached.length
+      : 0,
+    adaCache: Array.isArray(cached)
+  };
+}
 // =====================================================================
 // 15. KASIR — KERANJANG
 // =====================================================================
@@ -2519,6 +2558,10 @@ window.AnaFarmaDebug = {
 
   async outbox() {
     return ambilOutbox();
+  },
+
+  async cacheProduk() {
+    return cekCacheProdukOffline();
   },
 
   sync() {
