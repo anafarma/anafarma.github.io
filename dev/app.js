@@ -162,13 +162,19 @@ function isApiBelumDikonfigurasi() {
 }
 
 function isNetworkError(error) {
-  const message = errorMessage(error).toLowerCase();
+  const message =
+    errorMessage(error).toLowerCase();
+
   return (
     !navigator.onLine ||
     message.includes('network') ||
     message.includes('failed to fetch') ||
     message.includes('tidak bisa terhubung') ||
-    message.includes('offline')
+    message.includes('offline') ||
+    message.includes('server http 503') ||
+    message.includes('server http 502') ||
+    message.includes('server http 504') ||
+    message.includes('server http 500')
   );
 }
 
