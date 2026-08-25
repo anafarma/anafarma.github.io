@@ -852,17 +852,35 @@ function pasangInstallPrompt() {
 }
 
 function pasangServiceWorker() {
-  if (!('serviceWorker' in navigator)) return;
+  if (!('serviceWorker' in navigator)) {
+    return;
+  }
 
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('service-worker.js')
-      .catch(error => {
-        console.warn('[SW]', error);
-      });
+  window.addEventListener('load', async () => {
+    try {
+      const registration =
+        await navigator.serviceWorker.register(
+          'service-worker.js',
+          {
+            updateViaCache: 'none'
+          }
+        );
+
+      await registration.update();
+
+      console.log(
+        '[SW] terdaftar:',
+        registration.scope
+      );
+
+    } catch (error) {
+      console.error(
+        '[SW REGISTER]',
+        error
+      );
+    }
   });
 }
-
 // =====================================================================
 // 13. ROUTER
 // =====================================================================
