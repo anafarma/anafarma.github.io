@@ -12,7 +12,7 @@
  * - cache lama dibuang saat versi berubah
  */
 
-const CACHE_VERSION = 'ana-farma-v16-2';
+const CACHE_VERSION = 'ana-farma-v17';
 
 const APP_SHELL = [
   './',
@@ -21,7 +21,8 @@ const APP_SHELL = [
   './logo_data.js',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './icon-512-maskable.png'
 ];
 
 // ================================================================
@@ -77,21 +78,7 @@ self.addEventListener(
       caches.open(
         CACHE_VERSION
       )
-        .then(cache => {
-
-          return cache.addAll(
-            APP_SHELL
-          );
-
-        })
-        .catch(error => {
-
-          console.error(
-            '[SW INSTALL]',
-            error
-          );
-
-        })
+        .then(cache => cache.addAll(APP_SHELL))
 
     );
 
@@ -586,35 +573,15 @@ self.addEventListener(
 
         })
         .catch(async () => {
-
-          /*
-           * Jika request asset gagal,
-           * coba index.html sebagai
-           * fallback terakhir.
-           */
-
-          const fallback =
-            await caches.match(
-              scopeUrl(
-                './index.html'
-              )
-            );
-
-          if (fallback) {
-            return fallback;
-          }
-
           return new Response(
-            'Offline',
+            'Offline - resource tidak tersedia.',
             {
               status: 503,
               headers: {
-                'Content-Type':
-                  'text/plain; charset=utf-8'
+                'Content-Type': 'text/plain; charset=utf-8'
               }
             }
           );
-
         })
 
     );
