@@ -36,7 +36,7 @@
 const API_URL =
   'https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec';
 
-const APP_VERSION = '2026-08-18-ONLINE-OFFLINE-01';
+const APP_VERSION = '2026-08-26-OFFLINE-V17';
 const STORAGE_KEY = 'anafarma_sesi_v2';
 const DB_NAME = 'anafarma_offline_v2';
 const DB_VERSION = 1;
@@ -47,21 +47,7 @@ const MAX_SYNC_RETRY = 8;
 // POST yang aman disimpan ke Outbox saat offline.
 // login sengaja TIDAK dimasukkan.
 const OFFLINE_MUTATIONS = new Set([
-  'createTransaksi',
-  'mulaiShift',
-  'selesaiShift',
-  'adjustStok',
-  'addPembelian',
-  'addRetur',
-  'simpanStokOpname',
-  'simpanPengaturan',
-  'simpanUser',
-  'ubahPassword',
-  'simpanPelanggan',
-  'simpanSupplier',
-  'ajukanPembelian',
-  'setujuiPengajuanPembelian',
-  'tolakPengajuanPembelian'
+  'createTransaksi'
 ]);
 
 // =====================================================================
@@ -157,25 +143,37 @@ function errorMessage(error) {
   return error.message || String(error);
 }
 
+function makeApiError(message, kind, meta) {
+  var err = new Error(String(message || 'Terjadi kesalahan.'));
+  err.kind = kind || 'unknown';
+  if (meta && typeof meta === 'object') {
+    Object.keys(meta).forEach(function (key) { err[key] = meta[key]; });
+  }
+  return err;
+}
+
+function isRetryableTransportError(error) {
+  if (!error) return !navigator.onLine;
+  var kind = String(error.kind || '').toLowerCase();
+  var status = Number(error.httpStatus || 0);
+  if (kind === 'network' || kind === 'timeout') return true;
+  if (kind === 'http') return status === 502 || status === 503 || status === 504;
+  return false;
+}
+
 function isApiBelumDikonfigurasi() {
   return !API_URL || API_URL.includes('PASTE_URL_WEB_APP');
 }
 
 function isNetworkError(error) {
-  const message =
-    errorMessage(error).toLowerCase();
-
-  return (
-    !navigator.onLine ||
-    message.includes('network') ||
-    message.includes('failed to fetch') ||
-    message.includes('tidak bisa terhubung') ||
-    message.includes('offline') ||
-    message.includes('server http 503') ||
-    message.includes('server http 502') ||
-    message.includes('server http 504') ||
-    message.includes('server http 500')
-  );
+  if (!error) return !navigator.onLine;
+  var kind = String(error.kind || '').toLowerCase();
+  var status = Number(error.httpStatus || 0);
+  if (kind === 'server' || kind === 'config' || kind === 'response-parse') return false;
+  if (kind === 'network' || kind === 'timeout') return true;
+  if (kind === 'http') return status === 502 || status === 503 || status === 504;
+  var message = errorMessage(error).toLowerCase();
+  return !navigator.onLine || message.includes('network') || message.includes('failed to fetch') || message.includes('tidak bisa terhubung') || message.includes('offline');
 }
 
 // =====================================================================
@@ -335,20 +333,16 @@ async function bacaCache(action, params, maxAge = Infinity) {
 // =====================================================================
 
 async function masukkanOutbox(action, data, requestId) {
-  const item = {
-    requestId,
-    action,
-    data,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    retryCount: 0,
-    status: 'pending',
-    lastError: ''
+  if (!requestId) throw new Error('OUTBOX_REQUEST_ID_REQUIRED: requestId wajib tersedia.');
+  var existing = await dbGet('outbox', requestId);
+  var item = existing ? Object.assign({}, existing, {
+    action: action, data: data, updatedAt: Date.now(), status: 'pending', lastError: ''
+  }) : {
+    requestId: requestId, action: action, data: data, createdAt: Date.now(), updatedAt: Date.now(),
+    retryCount: 0, status: 'pending', lastError: ''
   };
-
   await dbPut('outbox', item);
   updateOfflineUI();
-
   return item;
 }
 
@@ -361,99 +355,66 @@ async function ambilOutbox() {
 }
 
 async function jumlahOutbox() {
-  const items = await ambilOutbox();
-  return items.filter(x => x.status === 'pending' || x.status === 'retry').length;
+  var items = await ambilOutbox();
+  return items.filter(function (item) {
+    return item.status === 'pending' || item.status === 'retry' || item.status === 'syncing';
+  }).length;
 }
+
+async function adaTransaksiOfflinePending() {
+  var items = await ambilOutbox();
+  return items.some(function (item) {
+    return item.action === 'createTransaksi' && item.status !== 'failed' && item.status !== 'done';
+  });
+}
+
 
 // =====================================================================
 // 08. API ONLINE
 // =====================================================================
 
 async function requestGetOnline(action, params) {
-  if (isApiBelumDikonfigurasi()) {
-    throw new Error('KONFIGURASI_BELUM_SELESAI');
-  }
-
-  const query = new URLSearchParams({
-    action,
-    ...(params || {})
-  });
-
+  if (isApiBelumDikonfigurasi()) throw makeApiError('KONFIGURASI_BELUM_SELESAI', 'config');
+  const query = new URLSearchParams({ action, ...(params || {}) });
   let response;
-
   try {
-    response = await fetch(`${API_URL}?${query.toString()}`, {
-      method: 'GET',
-      cache: 'no-store'
-    });
+    response = await fetch(`${API_URL}?${query.toString()}`, { method: 'GET', cache: 'no-store' });
   } catch (error) {
-    throw new Error(
-      'Tidak bisa terhubung ke server. Periksa koneksi internet.'
-    );
+    throw makeApiError('Tidak bisa terhubung ke server. Periksa koneksi internet.', 'network', { cause: error });
   }
-
   if (!response.ok) {
-    throw new Error(`Server HTTP ${response.status}.`);
+    throw makeApiError(`Server HTTP ${response.status}.`, 'http', { httpStatus: response.status });
   }
-
   let json;
-
-  try {
-    json = await response.json();
-  } catch (error) {
-    throw new Error('Respons server bukan JSON yang valid.');
-  }
-
-  if (!json.ok) {
-    throw new Error(json.error || 'Server menolak permintaan.');
-  }
-
+  try { json = await response.json(); }
+  catch (error) { throw makeApiError('Respons server bukan JSON yang valid.', 'response-parse', { cause: error }); }
+  if (!json || !json.ok) throw makeApiError((json && json.error) || 'Server menolak permintaan.', 'server', { serverResponse: json });
   return json.data;
 }
 
 async function requestPostOnline(action, data, requestId) {
-  if (isApiBelumDikonfigurasi()) {
-    throw new Error('KONFIGURASI_BELUM_SELESAI');
-  }
-
-  const payload = {
-    action,
-    data: data || {},
-    requestId: requestId || uuidKecil()
-  };
-
-  let response;
-
+  if (isApiBelumDikonfigurasi()) throw makeApiError('KONFIGURASI_BELUM_SELESAI', 'config');
+  var finalRequestId = requestId || uuidKecil();
+  var payload = { action: action, data: data || {}, requestId: finalRequestId };
+  var response;
   try {
     response = await fetch(API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload)
     });
   } catch (error) {
-    throw new Error(
-      'Tidak bisa terhubung ke server. Periksa koneksi internet.'
-    );
+    throw makeApiError('Tidak bisa terhubung ke server. Periksa koneksi internet.', 'network', { cause: error, requestId: finalRequestId });
   }
-
   if (!response.ok) {
-    throw new Error(`Server HTTP ${response.status}.`);
+    throw makeApiError(`Server HTTP ${response.status}.`, 'http', { httpStatus: response.status, requestId: finalRequestId });
   }
-
   let json;
-
-  try {
-    json = await response.json();
-  } catch (error) {
-    throw new Error('Respons server bukan JSON yang valid.');
+  try { json = await response.json(); }
+  catch (error) { throw makeApiError('Respons server bukan JSON yang valid.', 'response-parse', { cause: error, requestId: finalRequestId }); }
+  if (!json || !json.ok) {
+    throw makeApiError((json && json.error) || 'Server menolak permintaan.', 'server', { serverResponse: json, requestId: (json && json.requestId) || finalRequestId });
   }
-
-  if (!json.ok) {
-    throw new Error(json.error || 'Server menolak permintaan.');
-  }
-
   return json.data;
 }
 
@@ -555,60 +516,30 @@ function setStatusOnline(isOnline) {
 
 async function syncOutbox() {
   if (!AppState.isOnline || AppState.syncRunning) return;
-
   AppState.syncRunning = true;
-
   try {
-    const items = await ambilOutbox();
-
-    for (const item of items) {
+    var items = await ambilOutbox();
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
       if (!AppState.isOnline) break;
-      if (item.status === 'done') continue;
-
+      if (item.status === 'done' || item.status === 'failed') continue;
       try {
-        await dbPut('outbox', {
-          ...item,
-          status: 'syncing',
-          updatedAt: Date.now()
-        });
-
-        const result = await requestPostOnline(
-          item.action,
-          item.data,
-          item.requestId
-        );
-
+        await dbPut('outbox', Object.assign({}, item, { status: 'syncing', updatedAt: Date.now() }));
+        var result = await requestPostOnline(item.action, item.data, item.requestId);
         await dbDelete('outbox', item.requestId);
-
-        window.dispatchEvent(
-          new CustomEvent('anafarma:sync-success', {
-            detail: {
-              item,
-              result
-            }
-          })
-        );
+        window.dispatchEvent(new CustomEvent('anafarma:sync-success', { detail: { item: item, result: result } }));
       } catch (error) {
-        const retryCount = Number(item.retryCount || 0) + 1;
-
-        await dbPut('outbox', {
-          ...item,
-          retryCount,
-          status: retryCount >= MAX_SYNC_RETRY ? 'failed' : 'retry',
+        var retryCount = Number(item.retryCount || 0) + 1;
+        var retryable = isRetryableTransportError(error);
+        var terminal = !retryable || retryCount >= MAX_SYNC_RETRY;
+        await dbPut('outbox', Object.assign({}, item, {
+          retryCount: retryCount,
+          status: terminal ? 'failed' : 'retry',
           updatedAt: Date.now(),
           lastError: errorMessage(error)
-        });
-
-        if (isNetworkError(error)) {
-          break;
-        }
-
-        console.error(
-          '[OUTBOX]',
-          item.action,
-          item.requestId,
-          error
-        );
+        }));
+        window.dispatchEvent(new CustomEvent('anafarma:sync-failed', { detail: { item: item, error: error, retryCount: retryCount, terminal: terminal } }));
+        if (retryable) break;
       }
     }
   } finally {
@@ -618,25 +549,14 @@ async function syncOutbox() {
 }
 
 function pasangOnlineOfflineListener() {
-  window.addEventListener('online', () => {
+  window.addEventListener('online', function () {
     setStatusOnline(true);
     toast('Koneksi kembali. Sinkronisasi dimulai.', 'success');
   });
-
-  window.addEventListener('offline', () => {
+  window.addEventListener('offline', function () {
     setStatusOnline(false);
     toast('Offline. Perubahan akan disimpan dan disinkronkan otomatis.', 'warn');
   });
-}
-
-function mulaiSyncPeriodik() {
-  if (AppState.syncTimer) {
-    clearInterval(AppState.syncTimer);
-  }
-
-  AppState.syncTimer = setInterval(() => {
-    if (AppState.isOnline) syncOutbox();
-  }, 15000);
 }
 
 function updateOfflineUI() {
@@ -1581,50 +1501,21 @@ function buildPayloadTransaksi() {
 }
 
 async function prosesCheckout() {
-  const error = cekBolehTransaksi();
-
-  if (error) {
-    throw new Error(error);
+  var error = cekBolehTransaksi();
+  if (error) throw new Error(error);
+  if (!AppState.cart.length) throw new Error('Keranjang masih kosong.');
+  if (await adaTransaksiOfflinePending()) {
+    throw new Error('Masih ada transaksi offline yang menunggu sinkronisasi. Tunggu sampai transaksi tersebut selesai disinkronkan sebelum membuat transaksi baru.');
   }
-
-  if (!AppState.cart.length) {
-    throw new Error('Keranjang masih kosong.');
-  }
-
-  const payload =
-    buildPayloadTransaksi();
-
-  const hasil = await apiPost(
-    'createTransaksi',
-    payload,
-    {
-      allowOffline: true
-    }
-  );
-
-  if (
-    hasil &&
-    hasil.offlinePending === true
-  ) {
-    toast(
-      'Transaksi disimpan di perangkat. Akan disinkronkan saat online.',
-      'warn'
-    );
-
-    // PENTING:
-    // keranjang TIDAK dikosongkan ketika offline.
+  var payload = buildPayloadTransaksi();
+  var hasil = await apiPost('createTransaksi', payload, { allowOffline: true });
+  if (hasil && hasil.offlinePending === true) {
+    toast('Transaksi disimpan di perangkat. Akan disinkronkan saat online.', 'warn');
     return hasil;
   }
-
-  // Hanya server yang boleh menyebabkan cart kosong.
   kosongkanKeranjang();
-  invalidasiCacheProduk();
-
-  toast(
-    'Transaksi berhasil disimpan.',
-    'success'
-  );
-
+  await invalidasiCacheProduk();
+  toast('Transaksi berhasil disimpan.', 'success');
   return hasil;
 }
 
@@ -2436,6 +2327,43 @@ function pasangFormLogin() {
     }
   );
 }
+
+
+async function invalidasiCacheProduk() {
+  AppState.produkCache = [];
+  AppState.produkCacheAt = 0;
+  try {
+    var items = await dbGetAll('cache');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].action === 'getProduk') await dbDelete('cache', items[i].key);
+    }
+  } catch (error) {
+    console.warn('[CACHE INVALIDATE]', error);
+  }
+}
+
+function mulaiSyncPeriodik(intervalMs) {
+  clearInterval(AppState.syncTimer);
+  var wait = Number(intervalMs) > 0 ? Number(intervalMs) : 30000;
+  AppState.syncTimer = setInterval(function () {
+    if (AppState.isOnline) syncOutbox();
+  }, wait);
+}
+
+window.addEventListener('anafarma:sync-success', function (event) {
+  var detail = event && event.detail;
+  if (!detail || !detail.item || detail.item.action !== 'createTransaksi') return;
+  toast('Transaksi offline berhasil disinkronkan ke server.', 'success');
+  invalidasiCacheProduk();
+  if (AppState.cart.length) kosongkanKeranjang();
+  if (AppState.currentScreen === 'kasir') renderKasirCartStatus();
+});
+
+window.addEventListener('anafarma:sync-failed', function (event) {
+  var detail = event && event.detail;
+  if (!detail || !detail.item || detail.item.action !== 'createTransaksi') return;
+  if (detail.terminal) toast('Sinkronisasi transaksi gagal dan dihentikan. Periksa Outbox/Debug sebelum mencoba lagi.', 'error');
+});
 
 // =====================================================================
 // 24. INIT
