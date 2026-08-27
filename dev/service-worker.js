@@ -13,17 +13,33 @@ self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_VERSION).then(c=>c.addAll(SHELL)));
   self.skipWaiting();
 });
-
 self.addEventListener('activate',event=>{
   event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('ana-farma-')&&k!==CACHE_VERSION).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));
 });
 
-async function navigationResponse(event){
+async function prepareNavigationResponse(response,event){
+  if(!response||!response.ok)return response;
   try{
-    const res=await fetchTimeout(event.request,NAV_TIMEOUT_MS);
-    if(res&&res.ok)event.waitUntil(cachePut(new Request(abs('./index.html')),res));
-    return res;
-  }catch(_){
+    const html=await response.clone().text();
+    if(/runtime-hardening\.js/i.test(html)){
+      event.waitUntil(cachePut(new Request(abs('./index.html')),new Response(html,{status:response.status,statusText:response.statusText,headers:response.headers})));
+      return new Response(html,{status:response.status,statusText:response.statusText,headers:response.headers});
+    }
+    const injected='<script src="runtime-hardening.js?v=20260827-DEV-HARDENING-V18"></script>';
+    const patched=html.replace(/<\/body>/i,injected+'</body>');
+    const out=new Response(patched,{status:response.status,statusText:response.statusText,headers:response.headers});
+    event.waitUntil(cachePut(new Request(abs('./index.html')),out));
+    return out;
+  }catch(error){
+    console.warn('[DEV SW NAV PATCH]',error);
+    event.waitUntil(cachePut(new Request(abs('./index.html')),response));
+    return response;
+  }
+}
+
+async function navigationResponse(event){
+  try{return await prepareNavigationResponse(await fetchTimeout(event.request,NAV_TIMEOUT_MS),event);}
+  catch(_){
     const cached=await caches.match(abs('./index.html'));
     return cached||new Response('Offline - index.html belum tersedia.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}});
   }
@@ -34,8 +50,7 @@ async function scriptResponse(event){
   const cached=await caches.match(req)||await caches.match(req,{ignoreSearch:true});
   const update=fetchTimeout(req,SCRIPT_TIMEOUT_MS).then(async res=>{if(res&&res.ok){event.waitUntil(cachePut(req,res));const u=new URL(req.url);u.search='';event.waitUntil(cachePut(new Request(u.toString()),res));}return res;}).catch(()=>null);
   if(cached){event.waitUntil(update);return cached;}
-  const res=await update;
-  return res||new Response('',{status:504,statusText:'Offline resource unavailable'});
+  return (await update)||new Response('',{status:504,statusText:'Offline resource unavailable'});
 }
 
 async function staticResponse(event){
@@ -55,18 +70,9 @@ self.addEventListener('fetch',event=>{
     return;
   }
   if(u.origin!==self.location.origin)return;
-
-  if(req.mode==='navigate'){
-    event.respondWith(navigationResponse(event));
-    return;
-  }
-
+  if(req.mode==='navigate'){event.respondWith(navigationResponse(event));return;}
   const p=u.pathname.replace(/\/+/g,'/');
-  if(p.endsWith('/app.js')||p.endsWith('/logo_data.js')||p.endsWith('/runtime-hardening.js')){
-    event.respondWith(scriptResponse(event));
-    return;
-  }
-
+  if(p.endsWith('/app.js')||p.endsWith('/logo_data.js')||p.endsWith('/runtime-hardening.js')){event.respondWith(scriptResponse(event));return;}
   event.respondWith(staticResponse(event).catch(async()=>{
     const index=await caches.match(abs('./index.html'));
     return index||new Response('Offline - resource tidak tersedia.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}});
