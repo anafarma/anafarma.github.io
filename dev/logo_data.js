@@ -1,18 +1,14 @@
 /**
  * APOTEK ANA FARMA — lightweight logo manifest for /dev
- * V18.3
+ * V18.4
  */
 const LOGO_EMBLEM_B64 = './icon-192.png';
 const LOGO_FULL_B64 = './icon-512.png';
 
 /*
- * Login screen must participate in the common .screen router.
- * The old #login-screen rule had higher CSS specificity than
- * .screen/.screen.active, so the login view remained visible even
- * after app.js activated the dashboard.
- *
- * This compatibility rule is intentionally injected here because
- * logo_data.js is loaded before app.js and before the body router runs.
+ * Login screen participates in the common .screen router.
+ * The compatibility rule prevents the login selector from overriding
+ * .screen/.screen.active after a successful login.
  */
 (function installScreenVisibilityGuard() {
   const style = document.createElement('style');
@@ -25,18 +21,19 @@ const LOGO_FULL_B64 = './icon-512.png';
 })();
 
 (function loadDevRuntimeLayers() {
-  const apiContext = document.createElement('script');
-  apiContext.src = './api-context.js?v=20260827-DEV-API-CONTEXT-18-3';
-  apiContext.async = false;
-  document.head.appendChild(apiContext);
+  const layers = [
+    ['./api-context.js?v=20260827-DEV-API-CONTEXT-18-4', 'api-context'],
+    ['./feature-compat.js?v=20260827-DEV-COMPAT-18-4', 'compat'],
+    ['./features-runtime.js?v=20260827-DEV-FEATURES-18-4', 'features'],
+    ['./navigation-shell.js?v=20260827-DEV-SHELL-18-4', 'navigation-shell']
+  ];
 
-  const compat = document.createElement('script');
-  compat.src = './feature-compat.js?v=20260827-DEV-COMPAT-18-3';
-  compat.async = false;
-  document.head.appendChild(compat);
-
-  const features = document.createElement('script');
-  features.src = './features-runtime.js?v=20260827-DEV-FEATURES-18-3';
-  features.async = false;
-  document.head.appendChild(features);
+  layers.forEach(([src, id]) => {
+    if (document.querySelector(`script[data-dev-layer="${id}"]`)) return;
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = false;
+    script.dataset.devLayer = id;
+    document.head.appendChild(script);
+  });
 })();
