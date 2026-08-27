@@ -1,80 +1,71 @@
 /*
- * APOTEK ANA FARMA — DEV APP SHELL / NAVIGATION
- * V18.7
- * Menyatukan chrome aplikasi DEV dengan pola production tanpa mengubah backend.
+ * APOTEK ANA FARMA — DEV APP SHELL / NAVIGATION V18.8
  *
- * Aturan navigasi:
- * - Owner: Kelola Stok menjadi aksi utama.
- * - Pegawai: Transaksi menjadi aksi utama.
- * - Screen kasir tetap satu screen/fungsi untuk kedua role; label konsisten: Transaksi.
- * - Back memakai history SPA dan tidak keluar dari aplikasi secara tidak sengaja.
+ * Satu router SPA untuk /dev.
+ * Owner  : akses penuh, aksi utama = Kelola Stok.
+ * Pegawai: akses operasional, aksi utama = Transaksi.
+ * Back/Forward menggunakan History API tanpa meninggalkan SPA.
  */
 (function () {
   'use strict';
 
+  const VERSION = '2026-08-27-DEV-NAV-18-8';
   const ROLE_OWNER = 'Owner';
   const ROLE_PEGAWAI = 'Pegawai';
+  const MARK = 'ana-farma-dev';
   const TOPBAR_ID = 'dev-app-topbar';
   const MENU_ID = 'dev-account-menu';
-  const HISTORY_MARK = 'ana-farma-dev';
-  let originalSetScreen = null;
-  let initialized = false;
-  let historyReady = false;
-  let suppressHistory = false;
-  let lastUserId = null;
 
   const NAV = {
-    dashboard: { icon: '🏠', label: 'Beranda' },
+    dashboard: { icon: '⌂', label: 'Beranda' },
     kasir: { icon: '🧾', label: 'Transaksi' },
-    stok: { icon: '📦', label: 'Stok' },
+    stok: { icon: '📦', label: 'Kelola Stok' },
     riwayat: { icon: '🕘', label: 'Riwayat' },
     laporan: { icon: '📊', label: 'Laporan' },
     pembelian: { icon: '🚚', label: 'Pembelian' },
     retur: { icon: '↩️', label: 'Retur' },
     opname: { icon: '📋', label: 'Opname' },
     pelanggan: { icon: '👥', label: 'Pelanggan' },
-    profil: { icon: '⋯', label: 'Lainnya' }
+    profil: { icon: '👤', label: 'Profil' }
   };
 
   const OWNER_SCREENS = ['dashboard','kasir','stok','riwayat','pembelian','retur','pelanggan','supplier','laporan','opname','pengajuan','pengaturan','users','profil'];
   const PEGAWAI_SCREENS = ['dashboard','kasir','riwayat','pembelian','retur','pelanggan','opname','profil'];
 
-  function user() { return window.AppState && window.AppState.user; }
-  function role() { return user() && String(user().role || '').trim().toLowerCase() === 'owner' ? ROLE_OWNER : ROLE_PEGAWAI; }
-  function isOwner() { return role() === ROLE_OWNER; }
+  let originalSetScreen = null;
+  let installed = false;
+  let historyReady = false;
+  let lastUserKey = null;
+
+  function appState() { return window.AppState || null; }
+  function currentUser() { return appState() && appState().user; }
+  function isOwner() { return String(currentUser()?.role || '').trim().toLowerCase() === 'owner'; }
   function allowedScreens() { return isOwner() ? OWNER_SCREENS : PEGAWAI_SCREENS; }
-  function validScreen(name) { return allowedScreens().includes(name) ? name : 'dashboard'; }
-  function esc(value) {
-    if (typeof window.escapeHtml === 'function') return window.escapeHtml(value);
-    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-  }
+  function validScreen(screen) { return allowedScreens().includes(screen) ? screen : 'dashboard'; }
+  function esc(value) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(value) : String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c] || c)); }
 
   function injectStyle() {
-    if (document.getElementById('dev-app-shell-style')) return;
+    if (document.getElementById('dev-shell-style')) return;
     const style = document.createElement('style');
-    style.id = 'dev-app-shell-style';
+    style.id = 'dev-shell-style';
     style.textContent = `
-      #${TOPBAR_ID}{position:sticky;top:0;z-index:50;background:#fff;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06)}
+      #${TOPBAR_ID}{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(255,255,255,.94);backdrop-filter:blur(14px);border-bottom:1px solid rgba(20,35,38,.06);box-shadow:0 6px 24px rgba(20,35,38,.06)}
       #${TOPBAR_ID}.hidden{display:none!important}
-      #${TOPBAR_ID} .dev-brand-emblem{width:34px;height:34px;object-fit:contain;flex-shrink:0}
+      #${TOPBAR_ID} .dev-brand-emblem{width:36px;height:36px;object-fit:contain;flex-shrink:0}
       #${TOPBAR_ID} .dev-brand-text{flex:1;min-width:0;cursor:pointer}
-      #${TOPBAR_ID} .dev-brand-text b{display:block;font-size:15px;color:#0f766e;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      #${TOPBAR_ID} .dev-brand-text span{display:block;font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      #${TOPBAR_ID} .dev-top-actions{display:flex;align-items:center;gap:8px}
-      #${TOPBAR_ID} .dev-icon-btn{width:38px;height:38px;border-radius:50%;border:none;background:#f4f6f7;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
-      #${TOPBAR_ID} .dev-icon-btn:active{background:#e5e7eb}
-      #${TOPBAR_ID} .dev-back{display:none}
-      #${TOPBAR_ID} .dev-back.show{display:flex}
-      #${TOPBAR_ID} .dev-role{font-size:10px;font-weight:800;letter-spacing:.2px;color:#0d9488;margin-left:4px}
-      #${MENU_ID}{position:fixed;right:12px;top:calc(58px + env(safe-area-inset-top));z-index:120;background:#fff;border:1px solid #e5e7eb;border-radius:14px;box-shadow:0 12px 30px rgba(0,0,0,.16);width:min(280px,calc(100vw - 24px));padding:8px;display:none}
+      #${TOPBAR_ID} .dev-brand-text b{display:block;font-size:15px;font-weight:850;color:#0b6f68;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      #${TOPBAR_ID} .dev-brand-text span{display:block;font-size:11px;color:#68777a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+      #${TOPBAR_ID} .dev-top-actions{display:flex;align-items:center;gap:7px}
+      #${TOPBAR_ID} .dev-icon-btn{width:38px;height:38px;border:0;border-radius:50%;background:#eef3f2;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+      #${TOPBAR_ID} .dev-back{display:none}.dev-back.show{display:flex!important}
+      #${TOPBAR_ID} .dev-role{font-size:10px;font-weight:850;color:#0f8f83}
+      #${MENU_ID}{position:fixed;right:12px;top:calc(62px + env(safe-area-inset-top));z-index:120;width:min(290px,calc(100vw - 24px));padding:8px;background:rgba(255,255,255,.96);backdrop-filter:blur(16px);border:1px solid rgba(20,35,38,.08);border-radius:16px;box-shadow:0 18px 45px rgba(20,35,38,.14);display:none}
       #${MENU_ID}.show{display:block}
-      #${MENU_ID} .dev-account-head{padding:10px 10px 12px;border-bottom:1px solid #e5e7eb;margin-bottom:6px}
-      #${MENU_ID} .dev-account-name{font-weight:800;font-size:14px}
-      #${MENU_ID} .dev-account-sub{font-size:11px;color:#6b7280;margin-top:3px}
-      #${MENU_ID} button{width:100%;border:none;background:#fff;text-align:left;padding:11px 10px;border-radius:9px;font-weight:650;font-size:13px}
-      #${MENU_ID} button:active{background:#f4f6f7}
-      #${MENU_ID} .dev-danger{color:#dc2626}
-      @media(min-width:700px){#${TOPBAR_ID}{padding-left:20px;padding-right:20px}#${MENU_ID}{right:20px}}
+      #${MENU_ID} .dev-account-head{padding:11px 10px 13px;border-bottom:1px solid #e3e9e8;margin-bottom:6px}
+      #${MENU_ID} .dev-account-name{font-size:14px;font-weight:850}.dev-account-sub{font-size:11px;color:#68777a;margin-top:3px}
+      #${MENU_ID} button{width:100%;display:flex;align-items:center;gap:9px;border:0;background:transparent;text-align:left;padding:11px 10px;border-radius:10px;font-size:13px;font-weight:700}
+      #${MENU_ID} button:hover{background:#f4f8f7}.dev-danger{color:#dc2626!important}
+      @media(min-width:700px){#${TOPBAR_ID}{padding-left:24px;padding-right:24px}#${MENU_ID}{right:24px}}
     `;
     document.head.appendChild(style);
   }
@@ -92,13 +83,8 @@
       topbar.innerHTML = `
         <button class="dev-icon-btn dev-back" data-dev-shell="back" title="Kembali" aria-label="Kembali">←</button>
         <img class="dev-brand-emblem" src="icon-192.png" alt="Ana Farma" decoding="async">
-        <div class="dev-brand-text" data-dev-shell="home">
-          <b data-dev-shell="title">APOTEK ANA FARMA</b>
-          <span data-dev-shell="user">-</span>
-        </div>
-        <div class="dev-top-actions">
-          <button class="dev-icon-btn" data-dev-shell="profile" title="Akun" aria-label="Akun">👤</button>
-        </div>`;
+        <div class="dev-brand-text" data-dev-shell="home"><b data-dev-shell="title">APOTEK ANA FARMA</b><span data-dev-shell="user">-</span></div>
+        <div class="dev-top-actions"><button class="dev-icon-btn" data-dev-shell="profile" title="Akun" aria-label="Akun">👤</button></div>`;
       app.insertBefore(topbar, screenRoot);
     }
 
@@ -107,10 +93,7 @@
       menu = document.createElement('div');
       menu.id = MENU_ID;
       menu.innerHTML = `
-        <div class="dev-account-head">
-          <div class="dev-account-name" data-dev-account="name">-</div>
-          <div class="dev-account-sub" data-dev-account="role">-</div>
-        </div>
+        <div class="dev-account-head"><div class="dev-account-name" data-dev-account="name">-</div><div class="dev-account-sub" data-dev-account="role">-</div></div>
         <button data-dev-menu="profil">👤 Profil</button>
         <button data-dev-menu="pengaturan" data-owner-only="1">⚙️ Pengaturan</button>
         <button data-dev-menu="users" data-owner-only="1">🔐 Manajemen Pengguna</button>
@@ -120,105 +103,98 @@
     return true;
   }
 
-  function renderTopbar() {
+  function renderChrome() {
     const topbar = document.getElementById(TOPBAR_ID);
     const menu = document.getElementById(MENU_ID);
-    const u = user();
+    const u = currentUser();
+    const nav = document.getElementById('bottom-nav');
     if (!topbar) return;
     topbar.classList.toggle('hidden', !u);
-    if (!u) { menu?.classList.remove('show'); return; }
-    const userEl = topbar.querySelector('[data-dev-shell="user"]');
+    if (!u) {
+      menu?.classList.remove('show');
+      nav?.classList.add('hidden');
+      return;
+    }
+
     const name = u.nama || u.username || 'Pengguna';
-    const r = u.role || ROLE_PEGAWAI;
-    if (userEl) userEl.innerHTML = `${esc(name)} • <span class="dev-role">${esc(r)}${window.AppState?.isOnline ? ' • ONLINE' : ' • OFFLINE'}</span>`;
+    const role = u.role || ROLE_PEGAWAI;
+    const online = appState()?.isOnline ? 'ONLINE' : 'OFFLINE';
+    const userEl = topbar.querySelector('[data-dev-shell="user"]');
+    if (userEl) userEl.innerHTML = `${esc(name)} • <span class="dev-role">${esc(role)} • ${online}</span>`;
     if (menu) {
       menu.querySelector('[data-dev-account="name"]').textContent = name;
-      menu.querySelector('[data-dev-account="role"]').textContent = `${r} • ${u.username || ''}`;
+      menu.querySelector('[data-dev-account="role"]').textContent = `${role} • ${u.username || ''}`;
       menu.querySelectorAll('[data-owner-only="1"]').forEach(el => el.classList.toggle('hidden', !isOwner()));
     }
-  }
 
-  function renderBottomNav() {
-    const nav = document.getElementById('bottom-nav');
-    const u = user();
     if (!nav) return;
-    if (!u) { nav.classList.add('hidden'); return; }
     nav.classList.remove('hidden');
-
-    const items = isOwner()
-      ? ['dashboard','stok','kasir','laporan','profil']
-      : ['kasir','riwayat','pembelian','retur','opname','pelanggan'];
-
-    const current = validScreen(window.AppState.currentScreen || 'dashboard');
+    const items = isOwner() ? ['dashboard','stok','kasir','laporan','profil'] : ['kasir','riwayat','pembelian','retur','opname','pelanggan'];
+    const current = validScreen(appState()?.currentScreen || 'dashboard');
     nav.innerHTML = items.map(key => {
       const item = NAV[key];
-      const label = isOwner() && key === 'stok' ? 'Kelola Stok' : item.label;
-      const active = key === 'profil'
-        ? ['profil','riwayat','pembelian','retur','pelanggan','supplier','opname','pengaturan','users','pengajuan'].includes(current)
-        : current === key;
-      return `<button class="nav-item ${active ? 'active' : ''}" data-action="navigate" data-screen="${key}"><span class="nav-icon">${item.icon}</span><span>${label}</span></button>`;
+      const label = key === 'stok' ? 'Kelola Stok' : item.label;
+      return `<button class="nav-item ${current === key ? 'active' : ''}" data-action="navigate" data-screen="${key}" aria-label="${esc(label)}"><span class="nav-icon">${item.icon}</span><span>${esc(label)}</span></button>`;
     }).join('');
+
+    const back = topbar.querySelector('[data-dev-shell="back"]');
+    if (back) back.classList.toggle('show', current !== 'dashboard');
   }
 
-  function closeMenu() { document.getElementById(MENU_ID)?.classList.remove('show'); }
-
-  function pushInitialHistory(screen) {
+  function initHistory() {
     if (historyReady) return;
-    screen = validScreen(screen || 'dashboard');
+    const initial = validScreen(appState()?.currentScreen || 'dashboard');
     const state = history.state;
-    if (!state || state[HISTORY_MARK] !== true) {
-      history.replaceState({ ...(state || {}), [HISTORY_MARK]: true, screen }, '', `#${screen}`);
-    } else if (!state.screen) {
-      history.replaceState({ ...state, [HISTORY_MARK]: true, screen }, '', `#${screen}`);
-    }
+    if (!state || state[MARK] !== true) history.replaceState({ ...(state || {}), [MARK]: true, screen: initial }, '', `#${initial}`);
+    else if (!state.screen) history.replaceState({ ...state, [MARK]: true, screen: initial }, '', `#${initial}`);
     historyReady = true;
   }
 
-  function navigate(screen, push = true) {
+  function navigate(screen, push) {
+    if (!currentUser()) return;
     const target = validScreen(screen);
-    if (!window.AppState || !window.AppState.user) return;
-    closeMenu();
-    pushInitialHistory(window.AppState.currentScreen || 'dashboard');
-    if (push && !suppressHistory) {
-      const current = window.AppState.currentScreen || 'dashboard';
-      if (current !== target) history.pushState({ [HISTORY_MARK]: true, screen: target }, '', `#${target}`);
+    initHistory();
+    const current = validScreen(appState()?.currentScreen || 'dashboard');
+    if (push !== false && current !== target) {
+      history.pushState({ [MARK]: true, screen: target }, '', `#${target}`);
     }
-    suppressHistory = true;
-    try {
-      if (typeof originalSetScreen === 'function') originalSetScreen(target);
-    } finally { suppressHistory = false; }
-    window.AppState.currentScreen = target;
-    renderTopbar();
-    renderBottomNav();
-    const back = document.querySelector(`#${TOPBAR_ID} [data-dev-shell="back"]`);
-    if (back) back.classList.toggle('show', target !== 'dashboard');
+    if (typeof originalSetScreen === 'function') originalSetScreen(target);
+    if (appState()) appState().currentScreen = target;
+    renderChrome();
   }
 
   function onPopState(event) {
-    if (!user()) return;
+    if (!currentUser()) return;
     const state = event.state;
-    if (state && state[HISTORY_MARK]) {
+    if (state && state[MARK] === true) {
       navigate(state.screen || 'dashboard', false);
       return;
     }
-    history.pushState({ [HISTORY_MARK]: true, screen: 'dashboard' }, '', '#dashboard');
+    // Never allow browser Back from the SPA shell to expose an unrelated
+    // internal screen or leave the application by accident.
+    history.pushState({ [MARK]: true, screen: 'dashboard' }, '', '#dashboard');
     navigate('dashboard', false);
   }
 
-  function installRouter() {
-    if (initialized) return;
-    initialized = true;
-    originalSetScreen = window.setScreen;
-    if (typeof originalSetScreen === 'function') {
-      window.setScreen = function (screen) { return navigate(validScreen(screen), true); };
+  function logout() {
+    if (typeof window.logout === 'function') window.logout();
+    else {
+      localStorage.removeItem('anafarma_sesi_v2');
+      if (appState()) { appState().user = null; appState().cart = []; appState().cartCustomer = null; }
+      if (typeof window.tampilkanLogin === 'function') window.tampilkanLogin(); else location.reload();
     }
+    history.replaceState({ [MARK]: true, screen: 'login' }, '', '#login');
+    historyReady = false;
+    renderChrome();
+  }
 
-    document.addEventListener('click', function (event) {
-      const target = event.target.closest('[data-action="navigate"]');
+  function installEvents() {
+    document.addEventListener('click', event => {
+      const target = event.target.closest('[data-action="navigate"],[data-nav]');
       if (target) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        navigate(target.dataset.screen, true);
+        navigate(target.dataset.screen || target.dataset.nav, true);
         return;
       }
 
@@ -226,7 +202,7 @@
       if (back) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (window.AppState?.currentScreen !== 'dashboard' && history.length > 1) history.back();
+        if (appState()?.currentScreen && appState().currentScreen !== 'dashboard') history.back();
         else navigate('dashboard', false);
         return;
       }
@@ -235,84 +211,63 @@
       if (profile) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const menu = document.getElementById(MENU_ID);
-        renderTopbar();
-        menu?.classList.toggle('show');
+        renderChrome();
+        document.getElementById(MENU_ID)?.classList.toggle('show');
         return;
       }
 
       const home = event.target.closest('[data-dev-shell="home"]');
-      if (home) {
-        event.preventDefault();
-        navigate('dashboard', true);
-        return;
-      }
+      if (home) { event.preventDefault(); navigate('dashboard', true); return; }
 
       const menuItem = event.target.closest('[data-dev-menu]');
       if (menuItem) {
         event.preventDefault();
         const action = menuItem.dataset.devMenu;
-        closeMenu();
-        if (action === 'logout') {
-          if (typeof window.logout === 'function') window.logout();
-          else {
-            localStorage.removeItem('anafarma_sesi_v2');
-            if (window.AppState) {
-              window.AppState.user = null;
-              window.AppState.cart = [];
-              window.AppState.cartCustomer = null;
-            }
-            if (typeof window.tampilkanLogin === 'function') window.tampilkanLogin();
-            else location.reload();
-          }
-        } else {
-          navigate(action, true);
-        }
+        document.getElementById(MENU_ID)?.classList.remove('show');
+        if (action === 'logout') logout(); else navigate(action, true);
         return;
       }
 
       const menu = document.getElementById(MENU_ID);
       const profileButton = document.querySelector(`#${TOPBAR_ID} [data-dev-shell="profile"]`);
-      if (menu?.classList.contains('show') && !menu.contains(event.target) && !profileButton?.contains(event.target)) closeMenu();
+      if (menu?.classList.contains('show') && !menu.contains(event.target) && !profileButton?.contains(event.target)) menu.classList.remove('show');
     }, true);
 
     window.addEventListener('popstate', onPopState);
-    window.addEventListener('online', renderTopbar);
-    window.addEventListener('offline', renderTopbar);
+    window.addEventListener('online', renderChrome);
+    window.addEventListener('offline', renderChrome);
   }
 
-  function monitorLoginState() {
-    let last = null;
-    setInterval(() => {
-      const u = user();
-      const id = u ? (u.idUser || u.username || 'logged') : null;
-      if (id !== last) {
-        last = id;
-        renderTopbar();
-        renderBottomNav();
-        if (u) {
-          if (!historyReady) pushInitialHistory(window.AppState.currentScreen || 'dashboard');
-          navigate(window.AppState.currentScreen || 'dashboard', false);
-        } else {
-          historyReady = false;
-          closeMenu();
-        }
+  function monitorSession() {
+    let previous = null;
+    const check = () => {
+      const u = currentUser();
+      const key = u ? String(u.idUser || u.username || u.nama || 'logged') : null;
+      if (key !== previous) {
+        previous = key;
+        if (u) { initHistory(); navigate(validScreen(appState()?.currentScreen || 'dashboard'), false); }
+        else { historyReady = false; document.getElementById(MENU_ID)?.classList.remove('show'); renderChrome(); }
       } else if (u) {
-        renderTopbar();
-        renderBottomNav();
+        renderChrome();
       }
-    }, 250);
+    };
+    window.setInterval(check, 1000);
+    check();
   }
 
   function init() {
+    if (installed) return;
+    installed = true;
     injectStyle();
-    if (!ensureChrome()) return setTimeout(init, 100);
-    installRouter();
-    renderTopbar();
-    renderBottomNav();
-    monitorLoginState();
+    if (!ensureChrome()) { installed = false; setTimeout(init, 100); return; }
+    originalSetScreen = window.setScreen;
+    if (typeof originalSetScreen === 'function') window.setScreen = screen => navigate(screen, true);
+    installEvents();
+    monitorSession();
+    window.__ANA_FARMA_DEV_NAV_VERSION__ = VERSION;
+    console.info('[DEV NAV] installed', VERSION);
   }
 
-  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', init, { once: true });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
   else init();
 })();
