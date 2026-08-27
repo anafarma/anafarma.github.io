@@ -18,6 +18,39 @@
   function esc(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? ''); }
   function nav(name) { if (typeof window.navigasiKe === 'function') window.navigasiKe(name); else if (typeof window.setScreen === 'function') window.setScreen(name); }
 
+  async function loadShift() {
+    const u = user();
+    if (!u || owner() || typeof window.apiGet !== 'function') return null;
+    try {
+      const data = await window.apiGet('getShiftStatus', { idUser: u.idUser }, { cache: false });
+      u.shiftAktif = data || null;
+      return data || null;
+    } catch (_) { return u.shiftAktif || null; }
+  }
+
+  async function changeShift(active) {
+    const u = user();
+    if (!u || owner() || !window.AppState?.isOnline || typeof window.apiPost !== 'function') {
+      if (typeof window.toast === 'function') window.toast('Shift membutuhkan koneksi internet.', 'warn');
+      return;
+    }
+    const submit = async (position) => {
+      if (active) {
+        await window.apiPost('selesaiShift', { idUser: u.idUser }, { allowOffline: false });
+      } else {
+        await window.apiPost('mulaiShift', { idUser: u.idUser, lat: position?.coords?.latitude ?? null, lng: position?.coords?.longitude ?? null, modalAwal: 0 }, { allowOffline: false });
+      }
+      await loadShift();
+      if (typeof window.toast === 'function') window.toast(active ? 'Shift selesai.' : 'Shift dimulai.', 'success');
+      render(document.querySelector('[data-screen="dashboard"]'));
+    };
+    try {
+      if (!active && u.wajibGPS && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(pos => submit(pos).catch(window.tampilkanError), () => window.toast?.('GPS wajib untuk memulai shift. Izinkan lokasi lalu coba lagi.', 'warn'), { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+      } else await submit(null);
+    } catch (error) { if (typeof window.tampilkanError === 'function') window.tampilkanError(error); }
+  }
+
   function render(root) {
     const u = user();
     if (!root || !u) return;
@@ -64,15 +97,12 @@
       root.querySelector('[data-dash="menipis"]').textContent = Number(s.stokMenipis ?? 0);
       root.querySelector('[data-dash="habis"]').textContent = Number(s.stokHabis ?? 0);
       if (!owner() && root.querySelector('#dash-shift')) {
-        const shift = s.shift || {};
+        const shift = s.shift || user()?.shiftAktif || {};
         const active = shift.status === 'Aktif';
         root.querySelector('#dash-shift-status').textContent = active ? `Aktif sejak ${shift.mulai || '-'}` : 'Belum aktif';
         root.querySelector('#dash-shift').textContent = active ? 'Selesai Shift' : 'Mulai Shift';
         root.querySelector('#dash-shift').className = `btn ${active ? 'btn-danger' : 'btn-primary'} btn-sm`;
-        root.querySelector('#dash-shift').onclick = async () => {
-          const fn = active ? window.selesaiShiftDev : window.mulaiShiftDev;
-          if (typeof fn === 'function') await fn();
-        };
+        root.querySelector('#dash-shift').onclick = () => changeShift(active);
       }
       const alerts = [];
       if (Number(s.kadaluarsaDekat || 0)) alerts.push(`<div class="card" style="border-left:4px solid var(--warning);"><b>⏰ ${Number(s.kadaluarsaDekat)} produk mendekati kadaluarsa</b><div class="li-sub">Periksa Kelola Stok.</div></div>`);
@@ -82,12 +112,9 @@
 
     const cached = typeof window.bacaCache === 'function' ? window.bacaCache('getDashboardSummary', { idUser: u.idUser }, CACHE_AGE) : Promise.resolve(null);
     Promise.resolve(cached).then(data => { if (data) applySummary(data); }).catch(() => {});
+    Promise.resolve(window.jumlahOutbox ? window.jumlahOutbox() : 0).then(count => { const el = root.querySelector('#dash-sync'); if (el) el.textContent = count ? `${count} data menunggu sinkronisasi.` : 'Tidak ada data tertunda.'; }).catch(() => {});
 
-    Promise.resolve(window.jumlahOutbox ? window.jumlahOutbox() : 0).then(count => {
-      const el = root.querySelector('#dash-sync');
-      if (el) el.textContent = count ? `${count} data menunggu sinkronisasi.` : 'Tidak ada data tertunda.';
-    }).catch(() => {});
-
+    if (!owner()) loadShift().then(shift => applySummary({ shift })).catch(() => {});
     if (window.AppState?.isOnline && typeof window.apiGet === 'function') {
       setTimeout(() => window.apiGet('getDashboardSummary', { idUser: u.idUser }, { cache: true, maxAge: 60 * 1000 }).then(applySummary).catch(() => {}), 0);
       if (owner()) {
@@ -107,6 +134,5 @@
     window.__ANA_FARMA_DASHBOARD_PERF_VERSION__ = VERSION;
     console.info('[DEV DASHBOARD PERF] installed', VERSION);
   }
-
   install();
 })();
