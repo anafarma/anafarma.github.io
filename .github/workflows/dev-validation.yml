@@ -1,0 +1,41 @@
+name: DEV Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dev/**'
+      - '.github/workflows/dev-validation.yml'
+  pull_request:
+    paths:
+      - 'dev/**'
+      - '.github/workflows/dev-validation.yml'
+
+jobs:
+  validate-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JavaScript syntax
+        shell: bash
+        run: |
+          set -e
+          for f in dev/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
+      - name: Validate manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('dev/manifest.json','utf8')); console.log('manifest OK')"
+      - name: Validate required DEV assets
+        shell: bash
+        run: |
+          set -e
+          for f in dev/index.html dev/app.js dev/logo_data.js dev/api-context.js dev/features-runtime.js dev/service-worker.js dev/manifest.json dev/icon-192.png dev/icon-512.png dev/icon-512-maskable.png; do
+            test -f "$f" || { echo "Missing: $f"; exit 1; }
+          done
+          echo 'Required DEV assets OK'
+      - name: Ensure duplicate offline engine is absent
+        run: |
+          test ! -f dev/offline-sync.js
+          test ! -f dev/runtime-hardening.js
+          echo 'Duplicate offline engines absent'
