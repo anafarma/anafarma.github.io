@@ -1,12 +1,14 @@
 /**
- * APOTEK ANA FARMA — DEV SERVICE WORKER V18.6
+ * APOTEK ANA FARMA — DEV SERVICE WORKER V18.7
  *
  * Navigation: network-first with bounded timeout.
  * Runtime scripts: network-first with exact/base fallback.
  * Static assets: cache-first.
  * Apps Script: network-only, never cached.
+ *
+ * DEV only — production root is never touched by this worker.
  */
-const CACHE_VERSION='ana-farma-dev-v18-6';
+const CACHE_VERSION='ana-farma-dev-v18-7';
 const NAV_TIMEOUT_MS=2500;
 const SCRIPT_TIMEOUT_MS=2200;
 const NEW_API_URL='https://script.google.com/macros/s/AKfycbxcAPMcgyu7eNyEISUvIJHs0grSIFJCJ_DOnM2wX_b2gWfWUn9VSUi4sF81X9ndz5JU/exec';
@@ -17,7 +19,7 @@ function absolute(path){return new URL(path,self.registration.scope).href;}
 function isAppsScript(url){return url.hostname==='script.google.com'||url.hostname==='script.googleusercontent.com'||url.hostname.endsWith('.googleusercontent.com');}
 function sameOrigin(url){return url.origin===self.location.origin;}
 function normalizeApiRequest(request){const incoming=new URL(request.url);if(incoming.origin+incoming.pathname!==LEGACY_API_ORIGIN_PATH)return request;const target=new URL(NEW_API_URL);target.search=incoming.search;return new Request(target.href,request);}
-async function fetchTimeout(request,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);try{return await fetch(request,{signal:c.signal});}finally{clearTimeout(t);}}
+async function fetchTimeout(request,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);try{return await fetch(request,{signal:c.signal,cache:'no-store'});}finally{clearTimeout(t);}}
 async function cachePut(request,response){if(!response||!response.ok)return;try{const c=await caches.open(CACHE_VERSION);await c.put(request,response.clone());}catch(e){console.warn('[DEV SW CACHE]',e);}}
 async function installShell(){const c=await caches.open(CACHE_VERSION);await Promise.all(APP_SHELL.map(async p=>{try{const r=await fetch(absolute(p),{cache:'no-store'});if(r.ok)await c.put(absolute(p),r.clone());}catch(e){console.warn('[DEV SW INSTALL]',p,e);}}));}
 self.addEventListener('install',e=>e.waitUntil(installShell().then(()=>self.skipWaiting())));
