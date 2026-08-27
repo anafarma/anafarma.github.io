@@ -1,12 +1,12 @@
 /**
- * APOTEK ANA FARMA — DEV SERVICE WORKER V18.3
+ * APOTEK ANA FARMA — DEV SERVICE WORKER V18.4
  *
  * Navigation: network-first with bounded timeout.
  * Runtime scripts: network-first with exact/base fallback.
  * Static assets: cache-first.
  * Apps Script: network-only, never cached.
  */
-const CACHE_VERSION='ana-farma-dev-v18-3';
+const CACHE_VERSION='ana-farma-dev-v18-4';
 const NAV_TIMEOUT_MS=2500;
 const SCRIPT_TIMEOUT_MS=2200;
 const NEW_API_URL='https://script.google.com/macros/s/AKfycbxcAPMcgyu7eNyEISUvIJHs0grSIFJCJ_DOnM2wX_b2gWfWUn9VSUi4sF81X9ndz5JU/exec';
