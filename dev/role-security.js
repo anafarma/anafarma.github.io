@@ -18,7 +18,16 @@
     'setujuiPengajuanPembelian', 'tolakPengajuanPembelian'
   ]);
 
+  function normalizeRole() {
+    const u = window.AppState?.user;
+    if (!u) return;
+    const role = String(u.role || '').trim().toLowerCase();
+    if (role === 'owner') u.role = 'Owner';
+    else if (role === 'pegawai' || role === 'employee' || role === 'karyawan') u.role = 'Pegawai';
+  }
+
   function isOwner() {
+    normalizeRole();
     return String(window.AppState?.user?.role || '').trim().toLowerCase() === 'owner';
   }
 
@@ -29,9 +38,11 @@
       return;
     }
     window.__ANA_FARMA_ROLE_SECURITY__ = true;
+    normalizeRole();
 
     const originalPost = window.apiPost;
     const guardedPost = function (action, data, options) {
+      normalizeRole();
       if (!isOwner() && OWNER_ONLY_ACTIONS.has(String(action))) {
         const error = new Error('Aksi ini hanya dapat dilakukan oleh Owner.');
         error.kind = 'authorization';
@@ -45,6 +56,7 @@
     window.apiPost = guardedPost;
 
     const observer = new MutationObserver(() => {
+      normalizeRole();
       if (isOwner()) return;
       const profile = document.querySelector('[data-screen="profil"]');
       profile?.querySelectorAll('#pf-pass, [data-action="change-password"]').forEach(el => {
@@ -62,6 +74,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
 
     document.addEventListener('click', event => {
+      normalizeRole();
       if (isOwner()) return;
       const button = event.target.closest('button');
       if (!button) return;
@@ -72,7 +85,7 @@
       }
     }, true);
 
-    window.__ANA_FARMA_ROLE_SECURITY_VERSION__ = VERSION;
+    window.__ANA_FARMA_DEV_ROLE_SECURITY_VERSION__ = VERSION;
     console.info('[DEV ROLE SECURITY] installed', VERSION);
   }
 
