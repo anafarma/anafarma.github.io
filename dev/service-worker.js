@@ -17,10 +17,9 @@ const LEGACY_API_PATH = new URL(LEGACY_API_URL).origin + new URL(LEGACY_API_URL)
 const APP_SHELL = [
   './', './index.html', './app.js', './logo_data.js', './api-context.js',
   './feature-compat.js', './features-runtime.js', './navigation-shell.js',
-  './premium-ui.js', './manifest.json', './icon-192.png', './icon-512.png',
-  './icon-512-maskable.png'
+  './premium-ui.js', './role-security.js', './manifest.json', './icon-192.png',
+  './icon-512.png', './icon-512-maskable.png'
 ];
-
 function absolute(path) { return new URL(path, self.registration.scope).href; }
 function isAppsScript(url) { return url.hostname === 'script.google.com' || url.hostname === 'script.googleusercontent.com' || url.hostname.endsWith('.googleusercontent.com'); }
 function sameOrigin(url) { return url.origin === self.location.origin; }
@@ -39,38 +38,23 @@ async function fetchTimeout(request, ms) {
 }
 async function cachePut(request, response) {
   if (!response || !response.ok) return;
-  try {
-    const cache = await caches.open(CACHE_VERSION);
-    await cache.put(request, response.clone());
-  } catch (error) { console.warn('[DEV SW CACHE]', error); }
+  try { const cache = await caches.open(CACHE_VERSION); await cache.put(request, response.clone()); }
+  catch (error) { console.warn('[DEV SW CACHE]', error); }
 }
 async function installShell() {
   const cache = await caches.open(CACHE_VERSION);
   await Promise.all(APP_SHELL.map(async path => {
-    try {
-      const response = await fetch(absolute(path), { cache: 'no-store' });
-      if (response.ok) await cache.put(absolute(path), response.clone());
-    } catch (error) { console.warn('[DEV SW INSTALL]', path, error); }
+    try { const response = await fetch(absolute(path), { cache: 'no-store' }); if (response.ok) await cache.put(absolute(path), response.clone()); }
+    catch (error) { console.warn('[DEV SW INSTALL]', path, error); }
   }));
 }
-self.addEventListener('install', event => {
-  event.waitUntil(installShell().then(() => self.skipWaiting()));
-});
+self.addEventListener('install', event => { event.waitUntil(installShell().then(() => self.skipWaiting())); });
 self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key.startsWith('ana-farma-dev-') && key !== CACHE_VERSION).map(key => caches.delete(key))))
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('ana-farma-dev-') && key !== CACHE_VERSION).map(key => caches.delete(key)))).then(() => self.clients.claim()));
 });
 async function navigation(event) {
-  try {
-    const response = await fetchTimeout(event.request, NAV_TIMEOUT_MS);
-    if (response && response.ok) {
-      event.waitUntil(cachePut(absolute('./index.html'), response));
-      return response;
-    }
-  } catch (_) {}
+  try { const response = await fetchTimeout(event.request, NAV_TIMEOUT_MS); if (response && response.ok) { event.waitUntil(cachePut(absolute('./index.html'), response)); return response; } }
+  catch (_) {}
   return (await caches.match(absolute('./index.html'))) || new Response('Offline - index.html belum tersedia.', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 }
 async function runtimeScript(event) {
@@ -79,16 +63,14 @@ async function runtimeScript(event) {
     const response = await fetchTimeout(request, SCRIPT_TIMEOUT_MS);
     if (response && response.ok) {
       event.waitUntil(cachePut(request, response));
-      const base = new URL(request.url);
-      base.search = '';
+      const base = new URL(request.url); base.search = '';
       event.waitUntil(cachePut(new Request(base.href), response));
       return response;
     }
   } catch (_) {}
   const exact = await caches.match(request);
   if (exact) return exact;
-  const base = new URL(request.url);
-  base.search = '';
+  const base = new URL(request.url); base.search = '';
   return (await caches.match(base.href)) || new Response('', { status: 504, statusText: 'Offline resource unavailable' });
 }
 async function staticAsset(event) {
@@ -101,32 +83,18 @@ async function staticAsset(event) {
 self.addEventListener('fetch', event => {
   const request = event.request;
   const url = new URL(request.url);
-
   if ((request.method === 'GET' || request.method === 'POST') && isAppsScript(url)) {
     const normalized = normalizeApiRequest(request);
-    event.respondWith(
-      fetch(normalized).catch(() => new Response(JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json; charset=utf-8' }
-      }))
-    );
+    event.respondWith(fetch(normalized).catch(() => new Response(JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }), { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' } })));
     return;
   }
-
   if (request.method !== 'GET' || !sameOrigin(url)) return;
   if (request.mode === 'navigate') { event.respondWith(navigation(event)); return; }
-
   const path = url.pathname.replace(/\\+/g, '/');
-  const runtimeScripts = [
-    '/app.js', '/logo_data.js', '/api-context.js', '/feature-compat.js',
-    '/features-runtime.js', '/navigation-shell.js', '/premium-ui.js'
-  ];
+  const runtimeScripts = ['/app.js','/logo_data.js','/api-context.js','/feature-compat.js','/features-runtime.js','/navigation-shell.js','/premium-ui.js','/role-security.js'];
   if (runtimeScripts.some(name => path.endsWith(name))) { event.respondWith(runtimeScript(event)); return; }
-
-  event.respondWith(
-    staticAsset(event).catch(async () => {
-      const fallback = await caches.match(absolute('./index.html'));
-      return fallback || new Response('Offline - resource tidak tersedia.', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
-    })
-  );
+  event.respondWith(staticAsset(event).catch(async () => {
+    const fallback = await caches.match(absolute('./index.html'));
+    return fallback || new Response('Offline - resource tidak tersedia.', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+  }));
 });
