@@ -3,7 +3,7 @@ function install(){
   if(typeof apiGet!=='function'||typeof apiPost!=='function'||typeof AppState==='undefined'){setTimeout(install,25);return;}
   if(window.__ANA_FARMA_DEV_API_CONTEXT__)return;
   window.__ANA_FARMA_DEV_API_CONTEXT__=true;
-  const protectedGet=new Set(['getProduk','getSupplier','getPelanggan','getTransaksi','getDetailTransaksi','getLogStok','getPembelian','getRetur','getStokOpnameLog','getLaporanPenjualan','getLaporanLabaRugi','getLaporanKadaluarsa','getAnalisisPenjualan','getOmzetPerKasir','getShiftStatus','getShiftLog','getUsers','getDashboardSummary','getPengajuanPembelian']);
+  const protectedGet=new Set(['getProduk','getSupplier','getPelanggan','getTransaksi','getDetailTransaksi','getLogStok','getPembelian','getRetur','getStokOpnameLog','getLaporanPenjualan','getLaporanLabaRugi','getLaporanKadaluarsa','getAnalisisPenjualan','getOmzetPerKasir','getShiftStatus','getShiftLog','getUsers','getDashboardSummary','getPengajuanPembelian','getPengaturan']);
   const targetActions=new Set(['updateUser','toggleGPSUser','resetPasswordUser']);
   const originalGet=window.apiGet;
   const originalPost=window.apiPost;
