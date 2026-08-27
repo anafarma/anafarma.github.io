@@ -1,15 +1,20 @@
 /**
  * APOTEK ANA FARMA — lightweight logo manifest for /dev
- * V18.1
+ * V18.2
  */
 const LOGO_EMBLEM_B64 = './icon-192.png';
 const LOGO_FULL_B64 = './icon-512.png';
 
 (function loadDevRuntimeLayers() {
   const apiContext = document.createElement('script');
-  apiContext.src = './api-context.js?v=20260827-DEV-API-CONTEXT-18-1';
+  apiContext.src = './api-context.js?v=20260827-DEV-API-CONTEXT-18-2';
   apiContext.async = false;
   document.head.appendChild(apiContext);
+
+  const compat = document.createElement('script');
+  compat.src = './feature-compat.js?v=20260827-DEV-COMPAT-18-2';
+  compat.async = false;
+  document.head.appendChild(compat);
 
   const features = document.createElement('script');
   features.src = './features-runtime.js?v=20260827-DEV-FEATURES-18-1';
