@@ -1,18 +1,17 @@
 /**
- * APOTEK ANA FARMA — Service Worker
- * OFFLINE APP SHELL — v16.2
+ * APOTEK ANA FARMA — DEV SERVICE WORKER V18
  *
- * Prinsip:
- * - HTML navigasi: NETWORK-FIRST
- * - app.js / logo_data.js: NETWORK-FIRST
- * - static asset: CACHE-FIRST
- * - Apps Script API: TIDAK dicache
- * - cache write menggunakan Response.clone() yang aman
- * - cache write diikat ke lifecycle fetch dengan event.waitUntil()
- * - cache lama dibuang saat versi berubah
+ * Strategy:
+ * - navigation: network-first with bounded timeout, cached index fallback
+ * - app.js/logo_data.js: stale-while-revalidate for fast startup + background update
+ * - static assets: cache-first
+ * - Apps Script: network-only, never cached
+ * - only same-origin requests are handled by the application cache rules
  */
 
-const CACHE_VERSION = 'ana-farma-v17';
+const CACHE_VERSION = 'ana-farma-dev-v18';
+const NAV_TIMEOUT_MS = 2500;
+const SCRIPT_TIMEOUT_MS = 2000;
 
 const APP_SHELL = [
   './',
@@ -25,566 +24,163 @@ const APP_SHELL = [
   './icon-512-maskable.png'
 ];
 
-// ================================================================
-// HELPER
-// ================================================================
-
 function scopeUrl(path) {
-  return new URL(
-    path,
-    self.registration.scope
-  ).href;
+  return new URL(path, self.registration.scope).href;
 }
 
-function cachePut(cacheName, request, response) {
-  if (!response || !response.ok) {
-    return Promise.resolve();
+function isAppsScript(url) {
+  return url.hostname === 'script.google.com' ||
+         url.hostname === 'script.googleusercontent.com' ||
+         url.hostname.endsWith('.googleusercontent.com');
+}
+
+function withTimeout(request, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(request, { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+async function putCache(request, response) {
+  if (!response || !response.ok) return;
+  try {
+    const cache = await caches.open(CACHE_VERSION);
+    await cache.put(request, response.clone());
+  } catch (error) {
+    console.warn('[DEV SW CACHE]', error);
   }
+}
 
-  /*
-   * Clone dilakukan SEBELUM response digunakan
-   * oleh Cache.put().
-   *
-   * Satu clone = satu operasi Cache.put().
-   */
-  const copy = response.clone();
+async function cacheFirst(request) {
+  const cached = await caches.match(request, { ignoreSearch: true });
+  if (cached) return cached;
 
-  return caches.open(cacheName)
-    .then(cache => {
-      return cache.put(
-        request,
-        copy
-      );
+  const response = await fetch(request);
+  if (response && response.ok) await putCache(request, response);
+  return response;
+}
+
+async function staleWhileRevalidate(request, timeoutMs) {
+  const cached = await caches.match(request);
+  const cachedBase = cached || await caches.match(request, { ignoreSearch: true });
+
+  const networkPromise = withTimeout(request, timeoutMs)
+    .then(async response => {
+      if (response && response.ok) {
+        await putCache(request, response);
+        const url = new URL(request.url);
+        url.search = '';
+        await putCache(new Request(url.toString()), response);
+      }
+      return response;
     })
     .catch(error => {
-      console.error(
-        '[SW CACHE PUT]',
-        error
-      );
+      console.warn('[DEV SW REVALIDATE]', error);
+      return null;
     });
+
+  if (cachedBase) {
+    eventWait(networkPromise);
+    return cachedBase;
+  }
+
+  const response = await networkPromise;
+  if (response) return response;
+
+  return new Response('', {
+    status: 504,
+    statusText: 'Offline resource unavailable'
+  });
 }
 
-
-// ================================================================
-// INSTALL
-// ================================================================
-
-self.addEventListener(
-  'install',
-  event => {
-
-    event.waitUntil(
-
-      caches.open(
-        CACHE_VERSION
-      )
-        .then(cache => cache.addAll(APP_SHELL))
-
-    );
-
-    /*
-     * Langsung minta menjadi worker aktif.
-     */
-    self.skipWaiting();
-  }
-);
-
-
-// ================================================================
-// ACTIVATE
-// ================================================================
-
-self.addEventListener(
-  'activate',
-  event => {
-
-    event.waitUntil(
-
-      caches.keys()
-        .then(keys => {
-
-          return Promise.all(
-
-            keys
-              .filter(
-                key =>
-                  key !==
-                  CACHE_VERSION
-              )
-              .map(
-                key =>
-                  caches.delete(
-                    key
-                  )
-              )
-
-          );
-
-        })
-        .then(() => {
-
-          return self.clients.claim();
-
-        })
-
-    );
-  }
-);
-
-
-// ================================================================
-// FETCH
-// ================================================================
-
-self.addEventListener(
-  'fetch',
-  event => {
-
-    const request =
-      event.request;
-
-    /*
-     * Hanya GET yang ditangani.
-     */
-    if (
-      request.method !== 'GET'
-    ) {
-      return;
-    }
-
-    const url =
-      new URL(
-        request.url
-      );
-
-
-    // ============================================================
-    // APPS SCRIPT API
-    // ============================================================
-
-    /*
-     * Jangan pernah memasukkan response API
-     * ke App Shell cache.
-     *
-     * Cache data aplikasi ditangani IndexedDB
-     * oleh app.js.
-     */
-
-    if (
-      url.hostname.includes(
-        'script.google.com'
-      ) ||
-      url.hostname.includes(
-        'script.googleusercontent.com'
-      )
-    ) {
-
-      event.respondWith(
-
-        fetch(request)
-          .catch(() => {
-
-            return new Response(
-
-              JSON.stringify({
-                ok: false,
-                error:
-                  'Tidak ada koneksi internet.'
-              }),
-
-              {
-                status: 503,
-
-                headers: {
-                  'Content-Type':
-                    'application/json; charset=utf-8'
-                }
-              }
-
-            );
-
-          })
-
-      );
-
-      return;
-    }
-
-
-    // ============================================================
-    // NAVIGATION / HTML
-    // ============================================================
-
-    /*
-     * Online:
-     *
-     *     network
-     *        ↓
-     *     tampilkan response
-     *        +
-     *     simpan copy ke cache
-     *
-     * Offline:
-     *
-     *     cache index.html
-     */
-
-    if (
-      request.mode === 'navigate'
-    ) {
-
-      event.respondWith(
-
-        fetch(request)
-          .then(response => {
-
-            if (
-              response &&
-              response.ok
-            ) {
-
-              /*
-               * clone() dibuat SEGERA,
-               * sebelum response dipakai.
-               */
-              const cachedResponse =
-                response.clone();
-
-              const cacheWrite =
-                caches.open(
-                  CACHE_VERSION
-                )
-                  .then(cache => {
-
-                    return cache.put(
-                      scopeUrl(
-                        './index.html'
-                      ),
-                      cachedResponse
-                    );
-
-                  })
-                  .catch(error => {
-
-                    console.error(
-                      '[SW HTML CACHE]',
-                      error
-                    );
-
-                  });
-
-              /*
-               * Pastikan browser tidak
-               * menghentikan operasi cache
-               * sebelum selesai.
-               */
-              event.waitUntil(
-                cacheWrite
-              );
-            }
-
-            return response;
-
-          })
-          .catch(async () => {
-
-            const cached =
-              await caches.match(
-                scopeUrl(
-                  './index.html'
-                )
-              );
-
-            if (cached) {
-              return cached;
-            }
-
-            return new Response(
-              'Offline - index.html belum tersedia.',
-              {
-                status: 503,
-                headers: {
-                  'Content-Type':
-                    'text/plain; charset=utf-8'
-                }
-              }
-            );
-
-          })
-
-      );
-
-      return;
-    }
-
-
-    // ============================================================
-    // APP.JS
-    // LOGO_DATA.JS
-    // ============================================================
-
-    const pathname =
-      url.pathname.replace(
-        /\/+/g,
-        '/'
-      );
-
-    const isAppJs =
-      pathname.endsWith(
-        '/app.js'
-      );
-
-    const isLogoData =
-      pathname.endsWith(
-        '/logo_data.js'
-      );
-
-
-    if (
-      isAppJs ||
-      isLogoData
-    ) {
-
-      event.respondWith(
-
-        fetch(request)
-          .then(response => {
-
-            if (
-              response &&
-              response.ok
-            ) {
-
-              /*
-               * ==================================================
-               * PENTING
-               * ==================================================
-               *
-               * Jangan:
-               *
-               * const clone = response.clone();
-               * cache.put(... clone);
-               * cache.put(... response.clone());
-               *
-               * secara tersebar di promise chain.
-               *
-               * Buat semua clone terlebih dahulu.
-               */
-
-              const exactCopy =
-                response.clone();
-
-              const baseUrl =
-                new URL(
-                  request.url
-                );
-
-              baseUrl.search = '';
-
-              const baseCopy =
-                response.clone();
-
-
-              const cacheWrite =
-                caches.open(
-                  CACHE_VERSION
-                )
-                  .then(cache => {
-
-                    /*
-                     * Cache URL persis.
-                     *
-                     * Contoh:
-                     * app.js?v=20260825-OFFLINE-V16
-                     */
-                    return cache.put(
-                      request,
-                      exactCopy
-                    );
-
-                  })
-                  .then(() => {
-
-                    /*
-                     * Cache URL dasar juga.
-                     *
-                     * Ini menjadi fallback
-                     * apabila offline dan
-                     * query version berbeda.
-                     */
-                    return caches.open(
-                      CACHE_VERSION
-                    )
-                      .then(cache => {
-
-                        return cache.put(
-                          baseUrl.toString(),
-                          baseCopy
-                        );
-
-                      });
-
-                  })
-                  .catch(error => {
-
-                    console.error(
-                      '[SW APP CACHE]',
-                      error
-                    );
-
-                  });
-
-              event.waitUntil(
-                cacheWrite
-              );
-            }
-
-            return response;
-
-          })
-          .catch(async () => {
-
-            /*
-             * ==================================================
-             * OFFLINE FALLBACK
-             * ==================================================
-             */
-
-            // 1. URL persis
-            const exact =
-              await caches.match(
-                request
-              );
-
-            if (exact) {
-              return exact;
-            }
-
-
-            // 2. URL dasar tanpa query
-            const baseUrl =
-              new URL(
-                request.url
-              );
-
-            baseUrl.search = '';
-
-            const fallback =
-              await caches.match(
-                baseUrl.toString()
-              );
-
-            if (fallback) {
-              return fallback;
-            }
-
-
-            return new Response(
-              '',
-              {
-                status: 504,
-                statusText:
-                  'Offline resource unavailable'
-              }
-            );
-
-          })
-
-      );
-
-      return;
-    }
-
-
-    // ============================================================
-    // STATIC ASSETS LAIN
-    // ============================================================
-
-    /*
-     * CACHE-FIRST
-     *
-     * Cocok untuk:
-     * - icon
-     * - manifest
-     * - gambar
-     * - font
-     * - asset statis lainnya
-     */
-
+function eventWait(promise) {
+  // Assigned by fetch handler for lifecycle-safe background caching.
+  if (self.__activeFetchEvent) self.__activeFetchEvent.waitUntil(promise);
+}
+
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_VERSION)
+      .then(cache => cache.addAll(APP_SHELL))
+      .catch(error => {
+        console.error('[DEV SW INSTALL]', error);
+        throw error;
+      })
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(
+        keys
+          .filter(key => key.startsWith('ana-farma-') && key !== CACHE_VERSION)
+          .map(key => caches.delete(key))
+      ))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', event => {
+  const request = event.request;
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  if (isAppsScript(url)) {
     event.respondWith(
+      fetch(request).catch(() => new Response(
+        JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }),
+        { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' } }
+      ))
+    );
+    return;
+  }
 
-      caches.match(
-        request,
-        {
-          ignoreSearch: true
-        }
-      )
-        .then(cached => {
+  if (url.origin !== self.location.origin) return;
 
-          if (cached) {
-            return cached;
+  self.__activeFetchEvent = event;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      withTimeout(request, NAV_TIMEOUT_MS)
+        .then(async response => {
+          if (response && response.ok) {
+            event.waitUntil(putCache(new Request(scopeUrl('./index.html')), response));
           }
-
-
-          return fetch(request)
-            .then(response => {
-
-              if (
-                response &&
-                response.ok
-              ) {
-
-                /*
-                 * Clone dibuat sekali
-                 * untuk Cache.put().
-                 */
-                const cachedResponse =
-                  response.clone();
-
-                const cacheWrite =
-                  caches.open(
-                    CACHE_VERSION
-                  )
-                    .then(cache => {
-
-                      return cache.put(
-                        request,
-                        cachedResponse
-                      );
-
-                    })
-                    .catch(error => {
-
-                      console.error(
-                        '[SW STATIC CACHE]',
-                        error
-                      );
-
-                    });
-
-                event.waitUntil(
-                  cacheWrite
-                );
-              }
-
-              return response;
-
-            });
-
+          return response;
         })
         .catch(async () => {
-          return new Response(
-            'Offline - resource tidak tersedia.',
-            {
-              status: 503,
-              headers: {
-                'Content-Type': 'text/plain; charset=utf-8'
-              }
-            }
-          );
+          const cached = await caches.match(scopeUrl('./index.html'));
+          if (cached) return cached;
+          return new Response('Offline - index.html belum tersedia.', {
+            status: 503,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+          });
         })
-
+        .finally(() => {
+          if (self.__activeFetchEvent === event) self.__activeFetchEvent = null;
+        })
     );
-
+    return;
   }
-);
+
+  const path = url.pathname.replace(/\/+/g, '/');
+  const isAppJs = path.endsWith('/app.js');
+  const isLogoData = path.endsWith('/logo_data.js');
+
+  if (isAppJs || isLogoData) {
+    event.respondWith(staleWhileRevalidate(request, SCRIPT_TIMEOUT_MS));
+    return;
+  }
+
+  event.respondWith(
+    cacheFirst(request).catch(async () => {
+      const cachedIndex = await caches.match(scopeUrl('./index.html'));
+      return cachedIndex || new Response('Offline - resource tidak tersedia.', {
+        status: 503,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      });
+    })
+  );
+});
