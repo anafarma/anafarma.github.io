@@ -1,180 +1,23 @@
 /**
- * APOTEK ANA FARMA — DEV SERVICE WORKER
- * V18.1
- *
- * Navigation: network-first + bounded timeout.
- * Application scripts: network-first + exact/base fallback.
+ * APOTEK ANA FARMA — DEV SERVICE WORKER V18.1
+ * Navigation: network-first with bounded timeout.
+ * Runtime scripts: network-first with exact/base fallback.
  * Static assets: cache-first.
  * Apps Script: network-only, never cached.
  */
-const CACHE_VERSION = 'ana-farma-dev-v18-1';
-const NAV_TIMEOUT_MS = 2500;
-const SCRIPT_TIMEOUT_MS = 2200;
-const APP_SHELL = [
-  './',
-  './index.html',
-  './app.js',
-  './logo_data.js',
-  './features-runtime.js',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-512-maskable.png'
-];
-
-function absolute(path) {
-  return new URL(path, self.registration.scope).href;
-}
-
-function isAppsScript(url) {
-  return url.hostname === 'script.google.com' ||
-    url.hostname === 'script.googleusercontent.com' ||
-    url.hostname.endsWith('.googleusercontent.com');
-}
-
-function isSameOrigin(url) {
-  return url.origin === self.location.origin;
-}
-
-async function fetchWithTimeout(request, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(request, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function putCache(request, response) {
-  if (!response || !response.ok) return;
-  try {
-    const cache = await caches.open(CACHE_VERSION);
-    await cache.put(request, response.clone());
-  } catch (error) {
-    console.warn('[DEV SW CACHE]', error);
-  }
-}
-
-async function cacheShell() {
-  const cache = await caches.open(CACHE_VERSION);
-  await Promise.all(APP_SHELL.map(async path => {
-    try {
-      const response = await fetch(absolute(path), { cache: 'no-store' });
-      if (response.ok) await cache.put(absolute(path), response.clone());
-    } catch (error) {
-      console.warn('[DEV SW INSTALL]', path, error);
-    }
-  }));
-}
-
-self.addEventListener('install', event => {
-  event.waitUntil(cacheShell().then(() => self.skipWaiting()));
-});
-
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys
-          .filter(key => key.startsWith('ana-farma-dev-') && key !== CACHE_VERSION)
-          .map(key => caches.delete(key))
-      ))
-      .then(() => self.clients.claim())
-  );
-});
-
-async function navigationResponse(event) {
-  try {
-    const response = await fetchWithTimeout(event.request, NAV_TIMEOUT_MS);
-    if (response && response.ok) {
-      event.waitUntil(putCache(absolute('./index.html'), response));
-      return response;
-    }
-  } catch (_) {}
-
-  const cached = await caches.match(absolute('./index.html'));
-  return cached || new Response(
-    'Offline - index.html belum tersedia.',
-    { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-  );
-}
-
-async function scriptResponse(event) {
-  const request = event.request;
-  try {
-    const response = await fetchWithTimeout(request, SCRIPT_TIMEOUT_MS);
-    if (response && response.ok) {
-      event.waitUntil(putCache(request, response));
-      const base = new URL(request.url);
-      base.search = '';
-      event.waitUntil(putCache(new Request(base.href), response));
-      return response;
-    }
-  } catch (_) {}
-
-  const exact = await caches.match(request);
-  if (exact) return exact;
-
-  const base = new URL(request.url);
-  base.search = '';
-  const fallback = await caches.match(base.href);
-  return fallback || new Response(
-    '',
-    { status: 504, statusText: 'Offline resource unavailable' }
-  );
-}
-
-async function staticResponse(event) {
-  const cached = await caches.match(event.request, { ignoreSearch: true });
-  if (cached) return cached;
-  const response = await fetch(event.request);
-  if (response && response.ok) event.waitUntil(putCache(event.request, response));
-  return response;
-}
-
-self.addEventListener('fetch', event => {
-  const request = event.request;
-  if (request.method !== 'GET') return;
-
-  const url = new URL(request.url);
-
-  // Apps Script is the authoritative data source and must never enter Cache Storage.
-  if (isAppsScript(url)) {
-    event.respondWith(
-      fetch(request).catch(() => new Response(
-        JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }),
-        { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' } }
-      ))
-    );
-    return;
-  }
-
-  if (!isSameOrigin(url)) return;
-
-  if (request.mode === 'navigate') {
-    event.respondWith(navigationResponse(event));
-    return;
-  }
-
-  const path = url.pathname.replace(/\\+/g, '/');
-  const isRuntimeScript =
-    path.endsWith('/app.js') ||
-    path.endsWith('/logo_data.js') ||
-    path.endsWith('/features-runtime.js');
-
-  if (isRuntimeScript) {
-    event.respondWith(scriptResponse(event));
-    return;
-  }
-
-  event.respondWith(
-    staticResponse(event).catch(async () => {
-      const fallback = await caches.match(absolute('./index.html'));
-      return fallback || new Response(
-        'Offline - resource tidak tersedia.',
-        { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-      );
-    })
-  );
-});
+const CACHE_VERSION='ana-farma-dev-v18-1';
+const NAV_TIMEOUT_MS=2500;
+const SCRIPT_TIMEOUT_MS=2200;
+const APP_SHELL=['./','./index.html','./app.js','./logo_data.js','./api-context.js','./features-runtime.js','./manifest.json','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
+function absolute(path){return new URL(path,self.registration.scope).href;}
+function isAppsScript(url){return url.hostname==='script.google.com'||url.hostname==='script.googleusercontent.com'||url.hostname.endsWith('.googleusercontent.com');}
+function sameOrigin(url){return url.origin===self.location.origin;}
+async function fetchTimeout(request,ms){const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);try{return await fetch(request,{signal:c.signal});}finally{clearTimeout(t);}}
+async function cachePut(request,response){if(!response||!response.ok)return;try{const c=await caches.open(CACHE_VERSION);await c.put(request,response.clone());}catch(e){console.warn('[DEV SW CACHE]',e);}}
+async function installShell(){const c=await caches.open(CACHE_VERSION);await Promise.all(APP_SHELL.map(async p=>{try{const r=await fetch(absolute(p),{cache:'no-store'});if(r.ok)await c.put(absolute(p),r.clone());}catch(e){console.warn('[DEV SW INSTALL]',p,e);}}));}
+self.addEventListener('install',e=>e.waitUntil(installShell().then(()=>self.skipWaiting())));
+self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('ana-farma-dev-')&&k!==CACHE_VERSION).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+async function navigation(event){try{const r=await fetchTimeout(event.request,NAV_TIMEOUT_MS);if(r&&r.ok){event.waitUntil(cachePut(absolute('./index.html'),r));return r;}}catch(_){}return (await caches.match(absolute('./index.html')))||new Response('Offline - index.html belum tersedia.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}});}
+async function runtimeScript(event){const req=event.request;try{const r=await fetchTimeout(req,SCRIPT_TIMEOUT_MS);if(r&&r.ok){event.waitUntil(cachePut(req,r));const u=new URL(req.url);u.search='';event.waitUntil(cachePut(new Request(u.href),r));return r;}}catch(_){}const exact=await caches.match(req);if(exact)return exact;const u=new URL(req.url);u.search='';return (await caches.match(u.href))||new Response('',{status:504,statusText:'Offline resource unavailable'});}
+async function staticAsset(event){const c=await caches.match(event.request,{ignoreSearch:true});if(c)return c;const r=await fetch(event.request);if(r&&r.ok)event.waitUntil(cachePut(event.request,r));return r;}
+self.addEventListener('fetch',event=>{const req=event.request;if(req.method!=='GET')return;const u=new URL(req.url);if(isAppsScript(u)){event.respondWith(fetch(req).catch(()=>new Response(JSON.stringify({ok:false,error:'Tidak ada koneksi internet.'}),{status:503,headers:{'Content-Type':'application/json; charset=utf-8'}})));return;}if(!sameOrigin(u))return;if(req.mode==='navigate'){event.respondWith(navigation(event));return;}const p=u.pathname.replace(/\\+/g,'/');if(p.endsWith('/app.js')||p.endsWith('/logo_data.js')||p.endsWith('/api-context.js')||p.endsWith('/features-runtime.js')){event.respondWith(runtimeScript(event));return;}event.respondWith(staticAsset(event).catch(async()=>{const f=await caches.match(absolute('./index.html'));return f||new Response('Offline - resource tidak tersedia.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}});}));});
