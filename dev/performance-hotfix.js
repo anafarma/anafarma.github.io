@@ -1,13 +1,17 @@
-/* APOTEK ANA FARMA /dev — runtime data & performance hardening V18.6 */
+/* APOTEK ANA FARMA /dev — runtime data & performance hardening V18.7 */
 (function () {
   'use strict';
 
-  const VERSION = '2026-08-27-DEV-HOTFIX-18-6';
+  const VERSION = '2026-08-27-DEV-HOTFIX-18-7';
   const CACHE_AGE = 15 * 60 * 1000;
   const PRODUCT_CACHE_AGE = 60 * 60 * 1000;
 
   function state() { return window.AppState; }
   function user() { return state() && state().user; }
+  function isOwner() {
+    const u = user();
+    return !!u && String(u.role || '').trim().toLowerCase() === 'owner';
+  }
   function withUser() {
     const u = user();
     return { idUser: u && u.idUser ? u.idUser : null };
@@ -27,6 +31,10 @@
       if (value !== undefined && value !== null && String(value).trim() !== '') return value;
     }
     return fallback;
+  }
+  function idle(fn, timeout = 1200) {
+    if ('requestIdleCallback' in window) return window.requestIdleCallback(fn, { timeout });
+    return window.setTimeout(fn, 0);
   }
 
   function normalizeProduct(raw) {
@@ -56,7 +64,14 @@
 
   function renderDashboardFast(root) {
     if (!root || !user()) return;
-    const u = user();
+    const owner = isOwner();
+    const primaryScreen = owner ? 'stok' : 'kasir';
+    const primaryIcon = owner ? '📦' : '🧾';
+    const primaryLabel = owner ? 'Kelola Stok' : 'Transaksi';
+    const secondaryPrimary = owner
+      ? '<button class="menu-item" data-action="navigate" data-screen="kasir"><span class="menu-icon">🧾</span><span class="menu-label">Transaksi</span></button>'
+      : '<button class="menu-item" data-action="navigate" data-screen="stok"><span class="menu-icon">💊</span><span class="menu-label">Stok</span></button>';
+
     root.innerHTML = `<div class="container">
       <div class="section-title">Ringkasan</div>
       <div class="grid-2">
@@ -67,22 +82,22 @@
       </div>
       <div class="section-title">Akses Cepat</div>
       <div class="menu-grid">
-        <button class="menu-item menu-item-unggulan" data-action="navigate" data-screen="kasir"><span class="menu-icon">🛒</span><span class="menu-label">Kasir</span></button>
-        <button class="menu-item" data-action="navigate" data-screen="stok"><span class="menu-icon">💊</span><span class="menu-label">Stok</span></button>
+        <button class="menu-item menu-item-unggulan" data-action="navigate" data-screen="${primaryScreen}"><span class="menu-icon">${primaryIcon}</span><span class="menu-label">${primaryLabel}</span></button>
+        ${secondaryPrimary}
         <button class="menu-item" data-action="navigate" data-screen="riwayat"><span class="menu-icon">🧾</span><span class="menu-label">Riwayat</span></button>
         <button class="menu-item" data-action="navigate" data-screen="pembelian"><span class="menu-icon">📦</span><span class="menu-label">Pembelian</span></button>
         <button class="menu-item" data-action="navigate" data-screen="retur"><span class="menu-icon">↩️</span><span class="menu-label">Retur</span></button>
         <button class="menu-item" data-action="navigate" data-screen="pelanggan"><span class="menu-icon">👥</span><span class="menu-label">Pelanggan</span></button>
         <button class="menu-item" data-action="navigate" data-screen="laporan"><span class="menu-icon">📊</span><span class="menu-label">Laporan</span></button>
         <button class="menu-item" data-action="navigate" data-screen="opname"><span class="menu-icon">📋</span><span class="menu-label">Opname</span></button>
-        ${u.role === 'Owner' ? '<button class="menu-item" data-action="navigate" data-screen="pengaturan"><span class="menu-icon">⚙️</span><span class="menu-label">Pengaturan</span></button>' : ''}
+        ${owner ? '<button class="menu-item" data-action="navigate" data-screen="pengaturan"><span class="menu-icon">⚙️</span><span class="menu-label">Pengaturan</span></button>' : ''}
       </div>
       <div class="section-title">Status</div>
       <div class="card"><div class="list-item" style="box-shadow:none;margin:0;padding:0;"><div class="li-main"><div class="li-title">Koneksi</div><div class="li-sub" data-status-online>${navigator.onLine ? 'Online' : 'Offline'}</div></div><span class="pill pill-gray" data-status-sync>Memeriksa…</span></div></div>
     </div>`;
 
     const setSummary = summary => {
-      if (!summary) return;
+      if (!summary || !root.isConnected || window.AppState?.currentScreen !== 'dashboard') return;
       const totalProduk = summary.totalProduk ?? summary.TotalProduk ?? summary.total_produk ?? 0;
       const stokMenipis = summary.stokMenipis ?? summary.StokMenipis ?? summary.stok_menipis ?? 0;
       const penjualan = summary.penjualanHariIni ?? summary.PenjualanHariIni ?? summary.penjualan_hari_ini ?? 0;
@@ -99,6 +114,7 @@
       .catch(() => {});
 
     Promise.resolve(window.jumlahOutbox ? window.jumlahOutbox() : 0).then(count => {
+      if (!root.isConnected || window.AppState?.currentScreen !== 'dashboard') return;
       const el = root.querySelector('[data-status-sync]');
       if (!el) return;
       el.textContent = count > 0 ? `${count} pending` : 'Tersinkron';
@@ -106,20 +122,17 @@
     }).catch(() => {});
 
     const refresh = () => {
-      if (!window.apiGet) return;
+      if (!window.apiGet || !root.isConnected || window.AppState?.currentScreen !== 'dashboard') return;
       return window.apiGet('getDashboardSummary', withUser(), { maxAge: CACHE_AGE })
         .then(setSummary)
         .catch(error => console.warn('[DEV DASHBOARD REFRESH]', error));
     };
-    if (navigator.onLine) {
-      if ('requestIdleCallback' in window) requestIdleCallback(refresh, { timeout: 1200 });
-      else setTimeout(refresh, 0);
-    }
+    if (navigator.onLine) idle(refresh, 900);
   }
 
   function renderKasirFast(root) {
     if (!root || !user()) return;
-    root.innerHTML = `<div class="container"><div class="section-title">Kasir</div><div class="search-bar"><span>🔎</span><input type="search" placeholder="Cari nama obat atau kode…" data-kasir-search autocomplete="off"></div><div data-kasir-results><div class="empty-state">Memuat data obat…</div></div><div class="section-title">Keranjang</div><div data-cart-root></div><div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;"><strong>Total</strong><strong data-cart-total>Rp0</strong></div><div style="height:10px"></div><button class="btn btn-primary" data-action="checkout">Proses & Simpan · <span data-cart-count>0</span></button></div></div>`;
+    root.innerHTML = `<div class="container"><div class="section-title">Transaksi</div><div class="search-bar"><span>🔎</span><input type="search" placeholder="Cari nama obat atau kode…" data-kasir-search autocomplete="off"></div><div data-kasir-results><div class="empty-state">Memuat data obat…</div></div><div class="section-title">Keranjang</div><div data-cart-root></div><div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;"><strong>Total</strong><strong data-cart-total>Rp0</strong></div><div style="height:10px"></div><button class="btn btn-primary" data-action="checkout">Proses & Simpan · <span data-cart-count>0</span></button></div></div>`;
 
     if (window.renderCart) window.renderCart();
     const searchInput = root.querySelector('[data-kasir-search]');
@@ -128,6 +141,7 @@
     state().produkCache = products;
 
     const paint = keyword => {
+      if (!root.isConnected || window.AppState?.currentScreen !== 'kasir') return;
       const q = String(keyword || '').trim().toLowerCase();
       const filtered = products.filter(p => !q || p.nama.toLowerCase().includes(q) || p.kode.toLowerCase().includes(q)).slice(0, 30);
       if (!filtered.length) { results.innerHTML = '<div class="empty-state">Obat tidak ditemukan.</div>'; return; }
@@ -135,7 +149,7 @@
     };
 
     const applyProducts = data => {
-      if (!Array.isArray(data)) return;
+      if (!Array.isArray(data) || !root.isConnected || window.AppState?.currentScreen !== 'kasir') return;
       products = data.map(normalizeProduct);
       state().produkCache = products;
       state().produkCacheAt = Date.now();
@@ -150,11 +164,7 @@
     if (products.length) paint(searchInput.value);
 
     const refresh = () => window.apiGet ? window.apiGet('getProduk', params, { maxAge: PRODUCT_CACHE_AGE }).then(applyProducts).catch(error => console.warn('[DEV KASIR REFRESH]', error)) : null;
-    if (navigator.onLine) {
-      if (products.length) {
-        if ('requestIdleCallback' in window) requestIdleCallback(refresh, { timeout: 1500 }); else setTimeout(refresh, 0);
-      } else refresh();
-    }
+    if (navigator.onLine) idle(refresh, products.length ? 1500 : 300);
 
     searchInput?.addEventListener('input', event => {
       const q = event.target.value;
