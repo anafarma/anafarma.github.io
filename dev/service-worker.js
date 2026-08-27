@@ -15,10 +15,9 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbxcAPMcgyu7eNyEISUvIJHs
 const LEGACY_API_URL = 'https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec';
 const LEGACY_API_PATH = new URL(LEGACY_API_URL).origin + new URL(LEGACY_API_URL).pathname;
 const APP_SHELL = [
-  './', './index.html', './app.js', './logo_data.js', './api-context.js',
-  './feature-compat.js', './features-runtime.js', './navigation-shell.js',
-  './premium-ui.js', './role-security.js', './manifest.json', './icon-192.png',
-  './icon-512.png', './icon-512-maskable.png'
+  './', './index.html', './app.js', './logo_data.js', './api-context.js', './feature-compat.js',
+  './features-runtime.js', './navigation-shell.js', './premium-ui.js', './role-security.js',
+  './dashboard-performance.js', './manifest.json', './icon-192.png', './icon-512.png', './icon-512-maskable.png'
 ];
 function absolute(path) { return new URL(path, self.registration.scope).href; }
 function isAppsScript(url) { return url.hostname === 'script.google.com' || url.hostname === 'script.googleusercontent.com' || url.hostname.endsWith('.googleusercontent.com'); }
@@ -26,13 +25,11 @@ function sameOrigin(url) { return url.origin === self.location.origin; }
 function normalizeApiRequest(request) {
   const incoming = new URL(request.url);
   if (incoming.origin + incoming.pathname !== LEGACY_API_PATH) return request;
-  const target = new URL(API_URL);
-  target.search = incoming.search;
+  const target = new URL(API_URL); target.search = incoming.search;
   return new Request(target.href, request);
 }
 async function fetchTimeout(request, ms) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), ms);
   try { return await fetch(request, { signal: controller.signal, cache: 'no-store' }); }
   finally { clearTimeout(timer); }
 }
@@ -48,10 +45,8 @@ async function installShell() {
     catch (error) { console.warn('[DEV SW INSTALL]', path, error); }
   }));
 }
-self.addEventListener('install', event => { event.waitUntil(installShell().then(() => self.skipWaiting())); });
-self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('ana-farma-dev-') && key !== CACHE_VERSION).map(key => caches.delete(key)))).then(() => self.clients.claim()));
-});
+self.addEventListener('install', event => event.waitUntil(installShell().then(() => self.skipWaiting())));
+self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('ana-farma-dev-') && key !== CACHE_VERSION).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 async function navigation(event) {
   try { const response = await fetchTimeout(event.request, NAV_TIMEOUT_MS); if (response && response.ok) { event.waitUntil(cachePut(absolute('./index.html'), response)); return response; } }
   catch (_) {}
@@ -68,21 +63,17 @@ async function runtimeScript(event) {
       return response;
     }
   } catch (_) {}
-  const exact = await caches.match(request);
-  if (exact) return exact;
+  const exact = await caches.match(request); if (exact) return exact;
   const base = new URL(request.url); base.search = '';
   return (await caches.match(base.href)) || new Response('', { status: 504, statusText: 'Offline resource unavailable' });
 }
 async function staticAsset(event) {
-  const cached = await caches.match(event.request, { ignoreSearch: true });
-  if (cached) return cached;
-  const response = await fetch(event.request);
-  if (response && response.ok) event.waitUntil(cachePut(event.request, response));
+  const cached = await caches.match(event.request, { ignoreSearch: true }); if (cached) return cached;
+  const response = await fetch(event.request); if (response && response.ok) event.waitUntil(cachePut(event.request, response));
   return response;
 }
 self.addEventListener('fetch', event => {
-  const request = event.request;
-  const url = new URL(request.url);
+  const request = event.request; const url = new URL(request.url);
   if ((request.method === 'GET' || request.method === 'POST') && isAppsScript(url)) {
     const normalized = normalizeApiRequest(request);
     event.respondWith(fetch(normalized).catch(() => new Response(JSON.stringify({ ok: false, error: 'Tidak ada koneksi internet.' }), { status: 503, headers: { 'Content-Type': 'application/json; charset=utf-8' } })));
@@ -91,7 +82,7 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET' || !sameOrigin(url)) return;
   if (request.mode === 'navigate') { event.respondWith(navigation(event)); return; }
   const path = url.pathname.replace(/\\+/g, '/');
-  const runtimeScripts = ['/app.js','/logo_data.js','/api-context.js','/feature-compat.js','/features-runtime.js','/navigation-shell.js','/premium-ui.js','/role-security.js'];
+  const runtimeScripts = ['/app.js','/logo_data.js','/api-context.js','/feature-compat.js','/features-runtime.js','/navigation-shell.js','/premium-ui.js','/role-security.js','/dashboard-performance.js'];
   if (runtimeScripts.some(name => path.endsWith(name))) { event.respondWith(runtimeScript(event)); return; }
   event.respondWith(staticAsset(event).catch(async () => {
     const fallback = await caches.match(absolute('./index.html'));
