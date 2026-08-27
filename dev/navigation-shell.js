@@ -1,6 +1,13 @@
 /*
  * APOTEK ANA FARMA — DEV APP SHELL / NAVIGATION
+ * V18.7
  * Menyatukan chrome aplikasi DEV dengan pola production tanpa mengubah backend.
+ *
+ * Aturan navigasi:
+ * - Owner: Kelola Stok menjadi aksi utama.
+ * - Pegawai: Transaksi menjadi aksi utama.
+ * - Screen kasir tetap satu screen/fungsi untuk kedua role; label konsisten: Transaksi.
+ * - Back memakai history SPA dan tidak keluar dari aplikasi secara tidak sengaja.
  */
 (function () {
   'use strict';
@@ -33,8 +40,9 @@
   const PEGAWAI_SCREENS = ['dashboard','kasir','riwayat','pembelian','retur','pelanggan','opname','profil'];
 
   function user() { return window.AppState && window.AppState.user; }
-  function role() { return user() && String(user().role || '').toLowerCase() === 'owner' ? ROLE_OWNER : ROLE_PEGAWAI; }
-  function allowedScreens() { return role() === ROLE_OWNER ? OWNER_SCREENS : PEGAWAI_SCREENS; }
+  function role() { return user() && String(user().role || '').trim().toLowerCase() === 'owner' ? ROLE_OWNER : ROLE_PEGAWAI; }
+  function isOwner() { return role() === ROLE_OWNER; }
+  function allowedScreens() { return isOwner() ? OWNER_SCREENS : PEGAWAI_SCREENS; }
   function validScreen(name) { return allowedScreens().includes(name) ? name : 'dashboard'; }
   function esc(value) {
     if (typeof window.escapeHtml === 'function') return window.escapeHtml(value);
@@ -126,7 +134,7 @@
     if (menu) {
       menu.querySelector('[data-dev-account="name"]').textContent = name;
       menu.querySelector('[data-dev-account="role"]').textContent = `${r} • ${u.username || ''}`;
-      menu.querySelectorAll('[data-owner-only="1"]').forEach(el => el.classList.toggle('hidden', role() !== ROLE_OWNER));
+      menu.querySelectorAll('[data-owner-only="1"]').forEach(el => el.classList.toggle('hidden', !isOwner()));
     }
   }
 
@@ -136,16 +144,19 @@
     if (!nav) return;
     if (!u) { nav.classList.add('hidden'); return; }
     nav.classList.remove('hidden');
-    const items = role() === ROLE_OWNER
-      ? ['dashboard','kasir','stok','laporan','profil']
+
+    const items = isOwner()
+      ? ['dashboard','stok','kasir','laporan','profil']
       : ['kasir','riwayat','pembelian','retur','opname','pelanggan'];
+
     const current = validScreen(window.AppState.currentScreen || 'dashboard');
     nav.innerHTML = items.map(key => {
       const item = NAV[key];
+      const label = isOwner() && key === 'stok' ? 'Kelola Stok' : item.label;
       const active = key === 'profil'
         ? ['profil','riwayat','pembelian','retur','pelanggan','supplier','opname','pengaturan','users','pengajuan'].includes(current)
         : current === key;
-      return `<button class="nav-item ${active ? 'active' : ''}" data-action="navigate" data-screen="${key}"><span class="nav-icon">${item.icon}</span><span>${item.label}</span></button>`;
+      return `<button class="nav-item ${active ? 'active' : ''}" data-action="navigate" data-screen="${key}"><span class="nav-icon">${item.icon}</span><span>${label}</span></button>`;
     }).join('');
   }
 
@@ -210,25 +221,33 @@
         navigate(target.dataset.screen, true);
         return;
       }
+
       const back = event.target.closest('[data-dev-shell="back"]');
       if (back) {
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (history.length > 1) history.back(); else navigate('dashboard', false);
+        if (window.AppState?.currentScreen !== 'dashboard' && history.length > 1) history.back();
+        else navigate('dashboard', false);
         return;
       }
+
       const profile = event.target.closest('[data-dev-shell="profile"]');
       if (profile) {
         event.preventDefault();
         event.stopImmediatePropagation();
         const menu = document.getElementById(MENU_ID);
-        menu?.classList.toggle('show');
         renderTopbar();
-        if (menu) menu.classList.add('show');
+        menu?.classList.toggle('show');
         return;
       }
+
       const home = event.target.closest('[data-dev-shell="home"]');
-      if (home) { event.preventDefault(); navigate('dashboard', true); return; }
+      if (home) {
+        event.preventDefault();
+        navigate('dashboard', true);
+        return;
+      }
+
       const menuItem = event.target.closest('[data-dev-menu]');
       if (menuItem) {
         event.preventDefault();
@@ -236,10 +255,22 @@
         closeMenu();
         if (action === 'logout') {
           if (typeof window.logout === 'function') window.logout();
-          else { localStorage.removeItem('anafarma_sesi_v2'); location.hash = ''; location.reload(); }
-        } else navigate(action, true);
+          else {
+            localStorage.removeItem('anafarma_sesi_v2');
+            if (window.AppState) {
+              window.AppState.user = null;
+              window.AppState.cart = [];
+              window.AppState.cartCustomer = null;
+            }
+            if (typeof window.tampilkanLogin === 'function') window.tampilkanLogin();
+            else location.reload();
+          }
+        } else {
+          navigate(action, true);
+        }
         return;
       }
+
       const menu = document.getElementById(MENU_ID);
       const profileButton = document.querySelector(`#${TOPBAR_ID} [data-dev-shell="profile"]`);
       if (menu?.classList.contains('show') && !menu.contains(event.target) && !profileButton?.contains(event.target)) closeMenu();
@@ -248,16 +279,6 @@
     window.addEventListener('popstate', onPopState);
     window.addEventListener('online', renderTopbar);
     window.addEventListener('offline', renderTopbar);
-  }
-
-  function ensureFallbackProfileRenderer() {
-    if (!window.SCREEN_RENDERERS || window.SCREEN_RENDERERS.profil) return;
-    window.SCREEN_RENDERERS.profil = async function (root) {
-      const u = user();
-      if (!u) return;
-      root.innerHTML = `<div class="container"><div class="card" style="display:flex;align-items:center;gap:12px;"><div style="width:48px;height:48px;border-radius:50%;background:var(--primary-light);color:var(--primary-dark);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;flex-shrink:0;">${esc((u.nama || '?').charAt(0).toUpperCase())}</div><div><div style="font-weight:800;font-size:15.5px;">${esc(u.nama || u.username)}</div><div style="font-size:12.5px;color:var(--text-dim);">@${esc(u.username || '')} • ${esc(u.role || ROLE_PEGAWAI)}</div></div></div><div class="section-title">Akun</div><button class="btn btn-danger" data-dev-account-action="logout">🚪 Keluar</button></div>`;
-      root.querySelector('[data-dev-account-action="logout"]')?.addEventListener('click', () => window.logout?.());
-    };
   }
 
   function monitorLoginState() {
@@ -272,7 +293,10 @@
         if (u) {
           if (!historyReady) pushInitialHistory(window.AppState.currentScreen || 'dashboard');
           navigate(window.AppState.currentScreen || 'dashboard', false);
-        } else { historyReady = false; closeMenu(); }
+        } else {
+          historyReady = false;
+          closeMenu();
+        }
       } else if (u) {
         renderTopbar();
         renderBottomNav();
@@ -284,7 +308,6 @@
     injectStyle();
     if (!ensureChrome()) return setTimeout(init, 100);
     installRouter();
-    ensureFallbackProfileRenderer();
     renderTopbar();
     renderBottomNav();
     monitorLoginState();
