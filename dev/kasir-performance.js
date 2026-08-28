@@ -1,199 +1,40 @@
 /*
- * APOTEK ANA FARMA — DEV KASIR PERFORMANCE / UX
- * V18.9
+ * APOTEK ANA FARMA — DEV KASIR / TRANSAKSI V19.0
  *
- * Fokus:
- * - Data obat cache-first agar Kasir cepat tampil.
- * - Informasi obat: NAMA -> LOKASI RAK -> STOK + HARGA.
- * - Kode obat tidak ditampilkan pada baris utama kasir.
- * - Keranjang + Proses & Simpan selalu mudah dijangkau melalui
- *   floating action dock di atas bottom navigation.
- * - Detail keranjang tetap menggunakan cart milik app.js.
- * - Ikon utama menggunakan SVG inline agar tidak bergantung emoji/font eksternal.
- * - Tidak membuat API, IndexedDB, router, atau outbox baru.
+ * - cache-first product list
+ * - NAMA on first line
+ * - LOKASI RAK + STOK + HARGA on second line
+ * - multi-satuan penjualan (Pcs/Box or master-defined unit)
+ * - floating cart / checkout dock
+ * - uses the existing AppState/cart/api layer; no second API/DB/router
  */
 (function () {
   'use strict';
-
-  const VERSION = '2026-08-27-DEV-KASIR-UX-18-9';
-  const CACHE_AGE = 60 * 60 * 1000;
-  const INSTALLED = '__ANA_FARMA_KASIR_PERF__';
-  const STYLE_ID = 'ana-farma-kasir-ux-style';
-  const DOCK_ID = 'ana-farma-kasir-dock';
-  const SHEET_ID = 'ana-farma-kasir-sheet';
-
-  const ICON = {
-    cart: '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="20" r="1.2"></circle><circle cx="18" cy="20" r="1.2"></circle><path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 1.9-1.4L21 8H6"></path></svg>',
-    plus: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>',
-    search: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.6"></circle><path d="m16 16 4.2 4.2"></path></svg>'
-  };
-
-  function esc(v) {
-    return typeof window.escapeHtml === 'function'
-      ? window.escapeHtml(v)
-      : String(v ?? '').replace(/[&<>"']/g, c => ({
-          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-        }[c]));
-  }
-
-  function money(v) {
-    return typeof window.formatRupiah === 'function'
-      ? window.formatRupiah(v)
-      : `Rp ${Number(v || 0).toLocaleString('id-ID')}`;
-  }
-
-  function normalize(p) {
-    p = p || {};
-    const location = p.Lokasi_Rak ?? p.lokasiRak ?? p.lokasi ?? p.Lokasi ??
-      p.Nama_Display ?? p.namaLokasi ?? p.ID_Lokasi ?? '';
-
-    return {
-      ...p,
-      idProduk: String(p.idProduk ?? p.IDProduk ?? p.ID_Produk ?? p.kode ?? p.Kode ?? p.Kode_Obat ?? ''),
-      kode: String(p.kode ?? p.Kode ?? p.Kode_Obat ?? p.idProduk ?? p.IDProduk ?? ''),
-      nama: String(p.nama ?? p.Nama ?? p.Nama_Obat ?? p.namaObat ?? p.NamaObat ?? 'Obat tanpa nama'),
-      hargaJual: Number(p.hargaJual ?? p.HargaJual ?? p.Harga_Jual ?? p.harga ?? 0) || 0,
-      stok: Number(p.stok ?? p.Stok ?? p.STOK ?? 0) || 0,
-      lokasiRak: String(location || '').trim(),
-      satuan: String(p.satuan ?? p.Satuan ?? '').trim()
-    };
-  }
-
-  function injectStyle() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      .af-kasir-results{display:grid;gap:8px}
-      .af-kasir-product{position:relative;width:100%;border:1px solid rgba(16,38,42,.07)!important;border-radius:16px!important;background:rgba(255,255,255,.96)!important;padding:14px 16px!important;display:flex!important;align-items:center!important;gap:14px;box-shadow:0 3px 14px rgba(16,38,42,.045)!important;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
-      .af-kasir-product:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(16,38,42,.09)!important}.af-kasir-product:active{transform:scale(.995)}
-      .af-kasir-product-main{min-width:0;flex:1}.af-kasir-product-name{font-size:14px;font-weight:850;color:#142b2e;line-height:1.3}.af-kasir-product-meta{margin-top:5px;font-size:12px;color:#66777a;line-height:1.45}.af-kasir-product-meta strong{color:#142b2e;font-weight:800}.af-kasir-rack{color:#0b8178;font-weight:750}
-      .af-kasir-stock{white-space:nowrap;font-size:13px;font-weight:850;color:#142b2e}.af-kasir-stock.low{color:#c77700}.af-kasir-stock.empty{color:#c62828}
-      .af-kasir-add{width:36px;height:36px;flex:0 0 36px;border:0;border-radius:12px;background:#0f9b8f;color:#fff;display:grid;place-items:center}
-      .af-kasir-dock{position:fixed;left:50%;bottom:calc(72px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:90;width:min(620px,calc(100vw - 24px));display:flex;align-items:center;gap:8px;padding:8px;border:1px solid rgba(255,255,255,.78);border-radius:20px;background:rgba(255,255,255,.92);backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);box-shadow:0 14px 42px rgba(15,42,45,.18),0 2px 8px rgba(15,42,45,.08)}
-      .af-kasir-dock.hidden{display:none!important}.af-kasir-dock-cart{min-width:0;flex:1;display:flex;align-items:center;gap:10px;border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:14px;color:#142b2e}.af-kasir-dock-icon{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:#e9f6f4;color:#087d74;flex:0 0 38px}.af-kasir-dock-label{font-size:12px;color:#637477;line-height:1.15}.af-kasir-dock-total{font-size:14px;font-weight:900;color:#142b2e;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .af-kasir-dock-checkout{border:0;border-radius:14px;padding:12px 16px;background:#0f9b8f;color:#fff;font-size:13px;font-weight:850;white-space:nowrap;min-height:48px;box-shadow:0 6px 16px rgba(15,155,143,.22)}.af-kasir-dock-checkout:disabled{opacity:.45;box-shadow:none}
-      .af-kasir-sheet-wrap{position:fixed;inset:0;z-index:140;background:rgba(11,28,31,.34);display:none;align-items:flex-end}.af-kasir-sheet-wrap.show{display:flex}.af-kasir-sheet{width:min(620px,100%);max-height:min(78vh,680px);margin:0 auto;background:#fff;border-radius:22px 22px 0 0;box-shadow:0 -18px 55px rgba(11,28,31,.22);overflow:hidden;display:flex;flex-direction:column}
-      .af-kasir-sheet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid #e9eeee}.af-kasir-sheet-title{font-size:16px;font-weight:900;color:#142b2e}.af-kasir-sheet-sub{font-size:11px;color:#6b7a7c;margin-top:2px}.af-kasir-sheet-close{width:36px;height:36px;border:0;border-radius:50%;background:#f0f4f4;font-size:18px}.af-kasir-sheet-body{padding:10px 14px;overflow:auto}.af-kasir-sheet-foot{padding:12px 14px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #e9eeee;background:#fff}.af-kasir-sheet-row{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid #eef2f2}.af-kasir-sheet-row-main{min-width:0;flex:1}.af-kasir-sheet-row-name{font-weight:800;font-size:13px}.af-kasir-sheet-row-sub{font-size:11px;color:#6b7a7c;margin-top:3px}.af-kasir-qty{display:flex;align-items:center;gap:7px}.af-kasir-qty button{width:32px;height:32px;border:0;border-radius:9px;background:#edf3f2;font-weight:900}
-      .af-kasir-search-icon{display:grid;place-items:center;color:#607174;flex:0 0 18px}
-      @media(max-width:520px){.af-kasir-dock{bottom:calc(66px + env(safe-area-inset-bottom));width:calc(100vw - 16px);border-radius:17px}.af-kasir-dock-checkout{padding:11px 12px;font-size:12px}.af-kasir-product{padding:13px 12px!important}.af-kasir-stock{font-size:12px}}
-      @media(prefers-reduced-motion:reduce){.af-kasir-product{transition:none!important}}
-    `;
-    document.head.appendChild(style);
-  }
-
-  function createDock() {
-    let dock = document.getElementById(DOCK_ID);
-    if (!dock) {
-      dock = document.createElement('div');
-      dock.id = DOCK_ID;
-      dock.className = 'af-kasir-dock hidden';
-      dock.innerHTML = `<button type="button" class="af-kasir-dock-cart" data-kasir-open-cart aria-label="Buka keranjang"><span class="af-kasir-dock-icon">${ICON.cart}</span><span style="min-width:0;flex:1"><span class="af-kasir-dock-label">Keranjang <b data-kasir-dock-count>0</b></span><span class="af-kasir-dock-total" data-kasir-dock-total>Rp0</span></span></button><button type="button" class="af-kasir-dock-checkout" data-action="checkout" disabled>Proses &amp; Simpan</button>`;
-      document.body.appendChild(dock);
-      dock.querySelector('[data-kasir-open-cart]').addEventListener('click', openCartSheet);
-    }
-    updateDock();
-    return dock;
-  }
-
-  function createSheet() {
-    let wrap = document.getElementById(SHEET_ID);
-    if (wrap) return wrap;
-    wrap = document.createElement('div');
-    wrap.id = SHEET_ID;
-    wrap.className = 'af-kasir-sheet-wrap';
-    wrap.innerHTML = `<div class="af-kasir-sheet" role="dialog" aria-modal="true" aria-label="Keranjang"><div class="af-kasir-sheet-head"><div><div class="af-kasir-sheet-title">Keranjang</div><div class="af-kasir-sheet-sub" data-kasir-sheet-sub>0 item</div></div><button type="button" class="af-kasir-sheet-close" data-kasir-close aria-label="Tutup">×</button></div><div class="af-kasir-sheet-body" data-kasir-sheet-body></div><div class="af-kasir-sheet-foot"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px"><span style="font-size:12px;color:#68777a">Total</span><strong data-kasir-sheet-total>Rp0</strong></div><button type="button" class="btn btn-primary" style="width:100%" data-action="checkout" data-kasir-sheet-checkout disabled>Proses &amp; Simpan</button></div></div>`;
-    document.body.appendChild(wrap);
-    wrap.querySelector('[data-kasir-close]').addEventListener('click', closeCartSheet);
-    wrap.addEventListener('click', e => { if (e.target === wrap) closeCartSheet(); });
-    return wrap;
-  }
-
-  function updateDock() {
-    const dock = document.getElementById(DOCK_ID);
-    const state = window.AppState;
-    if (!dock || !state) return;
-    const active = state.currentScreen === 'kasir' && !!state.user;
-    dock.classList.toggle('hidden', !active);
-    const cart = Array.isArray(state.cart) ? state.cart : [];
-    const count = cart.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
-    const total = cart.reduce((sum, item) => sum + (Number(item.hargaSatuan) || 0) * (Number(item.qty) || 0), 0);
-    dock.querySelector('[data-kasir-dock-count]').textContent = String(count);
-    dock.querySelector('[data-kasir-dock-total]').textContent = money(total);
-    dock.querySelector('[data-action="checkout"]').disabled = count <= 0;
-    const sheet = document.getElementById(SHEET_ID);
-    if (sheet) {
-      sheet.querySelector('[data-kasir-sheet-sub]').textContent = `${count} item${count === 1 ? '' : 's'}`;
-      sheet.querySelector('[data-kasir-sheet-total]').textContent = money(total);
-      sheet.querySelector('[data-kasir-sheet-checkout]').disabled = count <= 0;
-      renderSheetItems(sheet);
-    }
-  }
-
-  function renderSheetItems(sheet) {
-    const body = sheet.querySelector('[data-kasir-sheet-body]');
-    const cart = window.AppState?.cart || [];
-    if (!cart.length) { body.innerHTML = '<div class="empty-state" style="padding:34px 12px">Keranjang masih kosong.<br><small>Pilih obat dari daftar transaksi.</small></div>'; return; }
-    body.innerHTML = cart.map(item => `<div class="af-kasir-sheet-row"><div class="af-kasir-sheet-row-main"><div class="af-kasir-sheet-row-name">${esc(item.nama)}</div><div class="af-kasir-sheet-row-sub">${money(item.hargaSatuan)} × ${Number(item.qty) || 0}</div></div><div class="af-kasir-qty"><button type="button" data-action="cart-minus" data-id-produk="${esc(item.idProduk)}" aria-label="Kurangi">−</button><strong>${Number(item.qty) || 0}</strong><button type="button" data-action="cart-plus" data-id-produk="${esc(item.idProduk)}" aria-label="Tambah">+</button></div></div>`).join('');
-  }
-
-  function openCartSheet() { const wrap = createSheet(); renderSheetItems(wrap); wrap.classList.add('show'); }
-  function closeCartSheet() { document.getElementById(SHEET_ID)?.classList.remove('show'); }
-
-  function render(root) {
-    const u = window.AppState?.user;
-    if (!root || !u) return;
-    injectStyle();
-    root.innerHTML = `<div class="container" style="padding-bottom:150px"><div class="section-title">Transaksi</div><div class="search-bar"><span class="af-kasir-search-icon">${ICON.search}</span><input type="search" placeholder="Cari nama obat atau kode…" data-kasir-search autocomplete="off"></div><div data-kasir-results class="af-kasir-results"><div class="empty-state">Menyiapkan data obat…</div></div><div class="section-title" style="margin-top:18px">Detail Keranjang</div><div data-cart-root></div></div>`;
-    if (typeof window.renderCart === 'function') window.renderCart();
-    createDock();
-    createSheet();
-
-    const search = root.querySelector('[data-kasir-search]');
-    const results = root.querySelector('[data-kasir-results]');
-    let products = Array.isArray(window.AppState.produkCache) ? window.AppState.produkCache.map(normalize) : [];
-    window.AppState.produkCache = products;
-
-    const paint = () => {
-      if (!root.isConnected || window.AppState.currentScreen !== 'kasir') return;
-      const q = String(search?.value || '').trim().toLowerCase();
-      const filtered = products.filter(p => !q || p.nama.toLowerCase().includes(q) || p.kode.toLowerCase().includes(q)).slice(0, 40);
-      results.innerHTML = filtered.length ? filtered.map(p => {
-        const stockClass = p.stok <= 0 ? 'empty' : p.stok <= 5 ? 'low' : '';
-        const rack = p.lokasiRak || 'Belum teridentifikasi';
-        return `<button class="af-kasir-product" type="button" data-action="add-cart" data-id-produk="${esc(p.idProduk)}"><span class="af-kasir-product-main"><span class="af-kasir-product-name">${esc(p.nama)}</span><span class="af-kasir-product-meta"><span class="af-kasir-rack">Rak: ${esc(rack)}</span> · <strong>Stok ${Number(p.stok) || 0}</strong> · <strong>${money(p.hargaJual)}</strong></span></span><span class="af-kasir-stock ${stockClass}">${Number(p.stok) || 0}</span><span class="af-kasir-add" aria-hidden="true">${ICON.plus}</span></button>`;
-      }).join('') : '<div class="empty-state">Obat tidak ditemukan.</div>';
-    };
-
-    const apply = data => {
-      if (!Array.isArray(data) || !root.isConnected || window.AppState.currentScreen !== 'kasir') return;
-      products = data.map(normalize); window.AppState.produkCache = products; window.AppState.produkCacheAt = Date.now(); paint();
-    };
-
-    const params = { idUser: u.idUser };
-    Promise.resolve(typeof window.bacaCache === 'function' ? window.bacaCache('getProduk', params, CACHE_AGE) : null).then(cached => { if (Array.isArray(cached) && cached.length) apply(cached); else paint(); }).catch(() => paint());
-    if (products.length) paint();
-
-    if (window.AppState.isOnline && typeof window.apiGet === 'function') setTimeout(() => window.apiGet('getProduk', params, { cache: true, maxAge: CACHE_AGE }).then(apply).catch(() => {}), products.length ? 250 : 0);
-    search?.addEventListener('input', () => { clearTimeout(search.__afTimer); search.__afTimer = setTimeout(paint, 70); });
-
-    const observer = new MutationObserver(() => updateDock());
-    observer.observe(root, { childList: true, subtree: true, characterData: true });
-    root.__afKasirObserver = observer;
-  }
-
-  function install() {
-    if (window[INSTALLED]) return;
-    if (!window.SCREEN_RENDERERS || typeof window.apiGet !== 'function' || !window.AppState) { setTimeout(install, 50); return; }
-    window[INSTALLED] = true;
-    injectStyle();
-    window.SCREEN_RENDERERS.kasir = render;
-    window.__ANA_FARMA_KASIR_PERF_VERSION__ = VERSION;
-    window.addEventListener('online', updateDock);
-    window.addEventListener('offline', updateDock);
-    document.addEventListener('click', event => { if (event.target.closest('[data-kasir-open-cart]')) return; if (!window.AppState || window.AppState.currentScreen !== 'kasir') closeCartSheet(); setTimeout(updateDock, 0); }, true);
-    console.info('[DEV KASIR UX] installed', VERSION);
-  }
-
+  const VERSION='2026-08-28-DEV-KASIR-19-0',CACHE_AGE=60*60*1000,STYLE_ID='ana-farma-kasir-19-style',DOCK_ID='ana-farma-kasir-dock',SHEET_ID='ana-farma-kasir-sheet',INSTALLED='__ANA_FARMA_KASIR_19__';
+  const ICON={search:'<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.8" cy="10.8" r="6.6"/><path d="m16 16 4.2 4.2"/></svg>',cart:'<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.2"/><circle cx="18" cy="20" r="1.2"/><path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 1.9-1.4L21 8H6"/></svg>',plus:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',box:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m3 7 9-4 9 4-9 4-9-4Z"/><path d="M3 7v10l9 4 9-4V7M12 11v10"/></svg>'};
+  const esc=v=>typeof window.escapeHtml==='function'?window.escapeHtml(v):String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const money=v=>typeof window.formatRupiah==='function'?window.formatRupiah(v):`Rp ${Number(v||0).toLocaleString('id-ID')}`;
+  const toast=(m,t)=>window.toast?.(m,t);
+  function normalize(p){p=p||{};const code=p.Kode_Obat??p.kodeObat??p.kode??p.Kode??p.idProduk??p.IDProduk??'';const name=p.Nama_Obat??p.namaObat??p.nama??p.Nama??p.NamaObat??'Obat tanpa nama';const rack=p.Lokasi_Rak??p.LokasiRak??p.lokasiRak??p.Lokasi??p.Nama_Lokasi??p.Nama_Display??p.ID_Lokasi??'';return{raw:p,kode:String(code).trim(),idProduk:String(p.idProduk??p.IDProduk??code).trim(),nama:String(name).trim(),lokasi:String(rack||'').trim()||'Belum teridentifikasi',stok:Math.max(0,Number(p.Stok??p.stok??0)||0),satuan:String(p.Satuan??p.satuan??'Pcs').trim()||'Pcs',harga:Number(p.Harga_Jual??p.hargaJual??p.harga??0)||0,satuan2:String(p.Satuan_Jual_2??p.satuanJual2??'').trim(),isi2:Math.max(1,Number(p.Isi_Per_Satuan_2??p.isiPerSatuan2??1)||1),harga2:Number(p.Harga_Jual_2??p.hargaJual2??0)||0,aktif2:p.Aktif_Satuan_2===true||p.Aktif_Satuan_2===1||String(p.Aktif_Satuan_2).toUpperCase()==='TRUE',minimum:Math.max(0,Number(p.Stok_Minimum??p.stokMinimum??0)||0)};}
+  function units(p){const out=[];if(p.harga>0)out.push({key:'normal',label:p.satuan,price:p.harga,isi:1});if(p.aktif2&&p.satuan2&&p.harga2>0&&p.isi2>1)out.push({key:'alternatif',label:p.satuan2,price:p.harga2,isi:p.isi2});return out;}
+  function list(){return Array.isArray(window.AppState?.produkCache)?window.AppState.produkCache.map(normalize):[];}
+  function findProduct(id){const x=String(id??'');return list().find(p=>p.idProduk===x||p.kode===x)||null;}
+  function injectStyle(){if(document.getElementById(STYLE_ID))return;const s=document.createElement('style');s.id=STYLE_ID;s.textContent=`
+    .af19-wrap{padding-bottom:150px}.af19-results{display:grid;gap:8px}.af19-card{width:100%;border:1px solid rgba(15,48,51,.07)!important;border-radius:17px!important;background:rgba(255,255,255,.97)!important;padding:14px!important;display:flex!important;align-items:flex-start!important;gap:12px;box-shadow:0 3px 14px rgba(15,42,45,.045)!important;transition:transform .16s ease,box-shadow .16s ease;text-align:left!important}.af19-card:hover{transform:translateY(-1px);box-shadow:0 9px 24px rgba(15,42,45,.08)!important}.af19-main{min-width:0;flex:1}.af19-name{font-size:14px;font-weight:900;color:#142b2e;line-height:1.35;white-space:normal}.af19-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;font-size:11.5px;line-height:1.4;color:#647578}.af19-rack{font-weight:800;color:#087d74}.af19-stock{font-weight:850;color:#142b2e}.af19-stock.low{color:#c77700}.af19-stock.empty{color:#c62828}.af19-price{font-weight:850;color:#142b2e}.af19-actions{flex:0 0 auto}.af19-add{width:38px;height:38px;border:0;border-radius:12px;background:#0f9b8f;color:#fff;display:grid;place-items:center;box-shadow:0 5px 13px rgba(15,155,143,.18)}.af19-add:disabled{opacity:.35;box-shadow:none}.af19-units{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.af19-unit{border:1px solid #dce8e6;background:#f7fbfa;color:#176d66;border-radius:10px;padding:7px 9px;font-size:11px;font-weight:850;display:inline-flex;align-items:center;gap:5px}.af19-unit.active{background:#e5f5f2;border-color:#9ddbd4}.af19-unit:disabled{opacity:.4}
+    .af19-dock{position:fixed;left:50%;bottom:calc(72px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:90;width:min(620px,calc(100vw - 16px));display:flex;align-items:center;gap:8px;padding:8px;border:1px solid rgba(255,255,255,.8);border-radius:20px;background:rgba(255,255,255,.94);backdrop-filter:blur(18px) saturate(1.2);-webkit-backdrop-filter:blur(18px) saturate(1.2);box-shadow:0 14px 42px rgba(15,42,45,.18),0 2px 8px rgba(15,42,45,.08)}.af19-dock.hidden{display:none!important}.af19-dock-cart{min-width:0;flex:1;display:flex;align-items:center;gap:9px;border:0;background:transparent;text-align:left;padding:6px 8px;color:#142b2e}.af19-dock-icon{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;background:#e9f6f4;color:#087d74;flex:0 0 38px}.af19-dock-label{font-size:11.5px;color:#637477}.af19-dock-total{font-size:14px;font-weight:900;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.af19-dock-checkout{border:0;border-radius:14px;padding:12px 15px;background:#0f9b8f;color:#fff;font-size:12.5px;font-weight:900;white-space:nowrap;min-height:48px;box-shadow:0 6px 16px rgba(15,155,143,.22)}.af19-dock-checkout:disabled{opacity:.45;box-shadow:none}
+    .af19-sheet{position:fixed;inset:0;z-index:140;background:rgba(11,28,31,.34);display:none;align-items:flex-end}.af19-sheet.show{display:flex}.af19-panel{width:min(620px,100%);max-height:min(78vh,700px);margin:0 auto;background:#fff;border-radius:22px 22px 0 0;box-shadow:0 -18px 55px rgba(11,28,31,.22);overflow:hidden;display:flex;flex-direction:column}.af19-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #e9eeee}.af19-head-title{font-size:16px;font-weight:900}.af19-head-sub{font-size:11px;color:#6b7a7c;margin-top:2px}.af19-close{width:36px;height:36px;border:0;border-radius:50%;background:#f0f4f4;font-size:20px}.af19-body{padding:8px 14px;overflow:auto}.af19-row{display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid #eef2f2}.af19-row-main{min-width:0;flex:1}.af19-row-name{font-size:13px;font-weight:850}.af19-row-sub{font-size:11px;color:#6b7a7c;margin-top:3px}.af19-qty{display:flex;align-items:center;gap:6px}.af19-qty button{width:32px;height:32px;border:0;border-radius:9px;background:#edf3f2;font-weight:900}.af19-foot{padding:12px 14px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #e9eeee;background:#fff}@media(max-width:520px){.af19-card{padding:13px 12px!important}.af19-dock{bottom:calc(66px + env(safe-area-inset-bottom));border-radius:17px}.af19-dock-checkout{padding:11px 12px;font-size:12px}}
+  `;document.head.appendChild(s);}
+  function cart(){return Array.isArray(window.AppState?.cart)?window.AppState.cart:[];}function total(){return cart().reduce((s,x)=>s+(Number(x.qty)||0)*(Number(x.hargaSatuan)||0),0);}function count(){return cart().reduce((s,x)=>s+(Number(x.qty)||0),0);}
+  function persist(){try{localStorage.setItem('anafarma_dev_cart_v18_1',JSON.stringify({savedAt:Date.now(),user:window.AppState.user?.idUser||'',cart:cart(),customer:window.AppState.cartCustomer||null}));}catch(_){} }
+  function createDock(){let d=document.getElementById(DOCK_ID);if(!d){d=document.createElement('div');d.id=DOCK_ID;d.className='af19-dock hidden';d.innerHTML=`<button type="button" class="af19-dock-cart" data-af19-open-cart><span class="af19-dock-icon">${ICON.cart}</span><span style="min-width:0;flex:1"><span class="af19-dock-label">Keranjang <b data-af19-count>0</b></span><span class="af19-dock-total" data-af19-total>Rp0</span></span></button><button type="button" class="af19-dock-checkout" data-action="checkout" disabled>Proses &amp; Simpan</button>`;document.body.appendChild(d);d.querySelector('[data-af19-open-cart]').onclick=openSheet;}updateDock();}
+  function createSheet(){let s=document.getElementById(SHEET_ID);if(s)return s;s=document.createElement('div');s.id=SHEET_ID;s.className='af19-sheet';s.innerHTML=`<div class="af19-panel" role="dialog" aria-modal="true"><div class="af19-head"><div><div class="af19-head-title">Keranjang</div><div class="af19-head-sub" data-af19-sheet-sub>0 item</div></div><button type="button" class="af19-close" data-af19-close>×</button></div><div class="af19-body" data-af19-body></div><div class="af19-foot"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-size:12px;color:#68777a">Total</span><strong data-af19-sheet-total>Rp0</strong></div><button type="button" class="btn btn-primary" style="width:100%" data-action="checkout" data-af19-sheet-checkout disabled>Proses &amp; Simpan</button></div></div>`;document.body.appendChild(s);s.querySelector('[data-af19-close]').onclick=closeSheet;s.addEventListener('click',e=>{if(e.target===s)closeSheet();});return s;}
+  function renderSheet(){const s=document.getElementById(SHEET_ID);if(!s)return;const body=s.querySelector('[data-af19-body]');if(!cart().length){body.innerHTML='<div class="empty-state" style="padding:34px 12px">Keranjang masih kosong.</div>';return;}body.innerHTML=cart().map(item=>{const id=item.idProduk??item.kodeObat??item.kode;const p=findProduct(id);const rack=p?.lokasi||'Belum teridentifikasi';return `<div class="af19-row"><div class="af19-row-main"><div class="af19-row-name">${esc(item.namaObat??item.nama??'Obat')}</div><div class="af19-row-sub">Rak: ${esc(rack)} · ${esc(item.namaSatuan??item.satuanJual??'Pcs')} · ${money(item.hargaSatuan)} × ${Number(item.qty)||0}</div></div><div class="af19-qty"><button type="button" data-action="cart-minus" data-id-produk="${esc(id)}">−</button><strong>${Number(item.qty)||0}</strong><button type="button" data-action="cart-plus" data-id-produk="${esc(id)}">+</button></div></div>`;}).join('');}
+  function updateDock(){const d=document.getElementById(DOCK_ID),st=window.AppState;if(!d||!st)return;const active=st.currentScreen==='kasir'&&!!st.user;d.classList.toggle('hidden',!active);d.querySelector('[data-af19-count]').textContent=String(count());d.querySelector('[data-af19-total]').textContent=money(total());d.querySelector('[data-action="checkout"]').disabled=count()<=0;const s=document.getElementById(SHEET_ID);if(s){s.querySelector('[data-af19-sheet-sub]').textContent=`${count()} item${count()===1?'':'s'}`;s.querySelector('[data-af19-sheet-total]').textContent=money(total());s.querySelector('[data-af19-sheet-checkout]').disabled=count()<=0;renderSheet();}}
+  function openSheet(){const s=createSheet();renderSheet();s.classList.add('show');}function closeSheet(){document.getElementById(SHEET_ID)?.classList.remove('show');}
+  function add(p,key='normal'){const choice=units(p).find(x=>x.key===key)||units(p)[0];if(!choice){toast('Harga jual belum tersedia.','warn');return false;}const max=Math.floor(p.stok/choice.isi);if(max<=0){toast(`Stok ${p.nama} tidak cukup untuk ${choice.label}.`,'warn');return false;}let item=cart().find(x=>String(x.idProduk??x.kodeObat??x.kode)===p.idProduk);if(!item){item={idProduk:p.idProduk,kode:p.kode,kodeObat:p.kode,nama:p.nama,namaObat:p.nama,hargaSatuan:choice.price,qty:1,stokTersedia:p.stok,stokSaatTambah:p.stok,satuanJual:choice.key,namaSatuan:choice.label,isiPerSatuan:choice.isi,synced:false};cart().push(item);}else if(item.satuanJual!==choice.key){item.satuanJual=choice.key;item.namaSatuan=choice.label;item.isiPerSatuan=choice.isi;item.hargaSatuan=choice.price;item.stokTersedia=p.stok;item.synced=false;item.qty=Math.min(Math.max(1,Number(item.qty)||1),max);}else{const next=Number(item.qty||0)+1;if(next>max){toast(`Stok maksimal ${max} ${choice.label}.`,'warn');return false;}item.qty=next;item.stokTersedia=p.stok;item.synced=false;}persist();updateDock();paintActiveList();return true;}
+  function changeQty(id,delta){const item=cart().find(x=>String(x.idProduk??x.kodeObat??x.kode)===String(id));if(!item)return;const p=findProduct(id),isi=Math.max(1,Number(item.isiPerSatuan)||1),stock=p?.stok??Number(item.stokTersedia??0),max=Math.floor(stock/isi),next=Number(item.qty||0)+Number(delta||0);if(next<=0)window.AppState.cart=cart().filter(x=>x!==item);else if(next>max){toast(`Stok maksimal ${max} ${item.namaSatuan||'unit'}`,'warn');return;}else{item.qty=next;item.stokTersedia=stock;item.synced=false;}persist();updateDock();paintActiveList();}
+  let activePaint=null;function paintActiveList(){activePaint?.();}
+  function render(root){const u=window.AppState?.user;if(!root||!u)return;injectStyle();root.innerHTML=`<div class="container af19-wrap"><div class="section-title">Transaksi</div><div class="search-bar"><span style="display:grid;place-items:center;color:#607174">${ICON.search}</span><input type="search" data-af19-search placeholder="Cari nama obat atau kode…" autocomplete="off"></div><div data-af19-results class="af19-results"><div class="empty-state">Menyiapkan data obat…</div></div></div>`;createDock();createSheet();const search=root.querySelector('[data-af19-search]'),results=root.querySelector('[data-af19-results]');let products=list();const paint=()=>{if(!root.isConnected||window.AppState?.currentScreen!=='kasir')return;const q=String(search?.value||'').trim().toLowerCase();const filtered=products.filter(p=>!q||p.nama.toLowerCase().includes(q)||p.kode.toLowerCase().includes(q));results.innerHTML=filtered.length?filtered.slice(0,60).map(p=>{const us=units(p),sel=cart().find(x=>String(x.idProduk??x.kodeObat??x.kode)===p.idProduk),activeKey=sel?.satuanJual||'',disabled=p.stok<=0||!us.length,stockClass=p.stok<=0?'empty':(p.minimum>0&&p.stok<=p.minimum?'low':'');const chips=us.length>1?`<div class="af19-units">${us.map(x=>{const max=Math.floor(p.stok/x.isi);return `<button type="button" class="af19-unit ${activeKey===x.key?'active':''}" data-af19-unit data-id="${esc(p.idProduk)}" data-unit="${esc(x.key)}" ${max<=0?'disabled':''}>${x.key==='alternatif'?ICON.box:''}${esc(x.label)} · ${money(x.price)}</button>`;}).join('')}</div>`:'';const du=us[0];return `<div class="af19-card"><div class="af19-main"><div class="af19-name">${esc(p.nama)}</div><div class="af19-meta"><span class="af19-rack">Rak: ${esc(p.lokasi)}</span><span>·</span><span class="af19-stock ${stockClass}">Stok ${p.stok}</span><span>·</span><span class="af19-price">${money(sel?.hargaSatuan??du?.price??p.harga)}</span></div>${chips}</div><div class="af19-actions"><button type="button" class="af19-add" data-af19-add data-id="${esc(p.idProduk)}" ${disabled?'disabled':''} aria-label="Tambah ${esc(p.nama)}">${ICON.plus}</button></div></div>`;}).join(''):'<div class="empty-state">Obat tidak ditemukan.</div>';};activePaint=paint;const apply=data=>{if(!Array.isArray(data)||!root.isConnected)return;products=data.map(normalize);window.AppState.produkCache=products.map(x=>x.raw);window.AppState.produkCacheAt=Date.now();paint();updateDock();};Promise.resolve(window.bacaCache?.('getProduk',{idUser:u.idUser},CACHE_AGE)).then(c=>{if(Array.isArray(c)&&c.length)apply(c);else paint();}).catch(()=>paint());if(products.length)paint();if(window.AppState.isOnline&&typeof window.apiGet==='function')setTimeout(()=>window.apiGet('getProduk',{idUser:u.idUser},{cache:true,maxAge:CACHE_AGE}).then(apply).catch(()=>{}),products.length?180:0);results.addEventListener('click',e=>{const unit=e.target.closest('[data-af19-unit]');if(unit){e.preventDefault();if(unit.disabled)return;const p=products.find(x=>x.idProduk===unit.dataset.id);if(p)add(p,unit.dataset.unit);return;}const b=e.target.closest('[data-af19-add]');if(b){e.preventDefault();if(b.disabled)return;const p=products.find(x=>x.idProduk===b.dataset.id);if(p)add(p,'normal');}});search?.addEventListener('input',()=>{clearTimeout(search.__af19Timer);search.__af19Timer=setTimeout(paint,60);});updateDock();}
+  function install(){if(window[INSTALLED])return;if(!window.SCREEN_RENDERERS||typeof window.apiGet!=='function'||!window.AppState){setTimeout(install,40);return;}window[INSTALLED]=true;injectStyle();window.tambahKeKeranjang=add;window.ubahQtyKeranjang=changeQty;window.SCREEN_RENDERERS.kasir=render;window.addEventListener('online',updateDock);window.addEventListener('offline',updateDock);document.addEventListener('click',()=>setTimeout(updateDock,0),true);window.__ANA_FARMA_KASIR_VERSION__=VERSION;console.info('[DEV KASIR]',VERSION);}
   install();
 })();
