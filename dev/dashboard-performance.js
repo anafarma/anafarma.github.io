@@ -1,138 +1,86 @@
 /*
- * APOTEK ANA FARMA — DEV DASHBOARD PERFORMANCE V18.8
- *
- * Dashboard-only optimization. Other feature renderers remain owned by
- * features-runtime.js. The dashboard paints immediately from IndexedDB
- * cache when available, then refreshes server data asynchronously.
+ * APOTEK ANA FARMA — DEV DASHBOARD V19.0
+ * Fast, role-aware dashboard. Employee must start shift before operations.
  */
-(function () {
+(function(){
   'use strict';
+  const VERSION='2026-08-28-DEV-DASHBOARD-19-0', CACHE_AGE=2*60*1000, INSTALLED='__ANA_FARMA_DASHBOARD_19__';
+  const esc=v=>typeof window.escapeHtml==='function'?window.escapeHtml(v):String(v??'');
+  const money=v=>typeof window.formatRupiah==='function'?window.formatRupiah(v):`Rp ${Number(v||0).toLocaleString('id-ID')}`;
+  const user=()=>window.AppState?.user||null;
+  const owner=()=>String(user()?.role||'').trim().toLowerCase()==='owner';
+  const active=()=>{const s=user()?.shiftAktif;return !!(s&&(s.status==='Aktif'||s.status==='active'||s.aktif===true));};
+  const nav=s=>typeof window.navigasiKe==='function'?window.navigasiKe(s):window.setScreen?.(s);
 
-  const VERSION = '2026-08-27-DEV-DASHBOARD-PERF-18-8';
-  const CACHE_AGE = 5 * 60 * 1000;
-  const INSTALLED = '__ANA_FARMA_DASHBOARD_PERF__';
-
-  function user() { return window.AppState?.user || null; }
-  function owner() { return String(user()?.role || '').trim().toLowerCase() === 'owner'; }
-  function money(v) { return typeof window.formatRupiah === 'function' ? window.formatRupiah(v) : `Rp ${Number(v || 0).toLocaleString('id-ID')}`; }
-  function esc(v) { return typeof window.escapeHtml === 'function' ? window.escapeHtml(v) : String(v ?? ''); }
-  function nav(name) { if (typeof window.navigasiKe === 'function') window.navigasiKe(name); else if (typeof window.setScreen === 'function') window.setScreen(name); }
-
-  async function loadShift() {
-    const u = user();
-    if (!u || owner() || typeof window.apiGet !== 'function') return null;
-    try {
-      const data = await window.apiGet('getShiftStatus', { idUser: u.idUser }, { cache: false });
-      u.shiftAktif = data || null;
-      return data || null;
-    } catch (_) { return u.shiftAktif || null; }
+  async function refreshShift(){
+    const u=user();if(!u||owner()||!window.AppState?.isOnline||typeof window.apiGet!=='function')return u?.shiftAktif||null;
+    try{const s=await window.apiGet('getShiftStatus',{idUser:u.idUser},{cache:false});u.shiftAktif=s&&s.status==='Aktif'?s:null;try{localStorage.setItem('anafarma_sesi_v2',JSON.stringify({user:u,savedAt:Date.now()}));}catch(_){}return u.shiftAktif;}catch(e){return u.shiftAktif||null;}
   }
 
-  async function changeShift(active) {
-    const u = user();
-    if (!u || owner() || !window.AppState?.isOnline || typeof window.apiPost !== 'function') {
-      if (typeof window.toast === 'function') window.toast('Shift membutuhkan koneksi internet.', 'warn');
-      return;
-    }
-    const submit = async (position) => {
-      if (active) {
-        await window.apiPost('selesaiShift', { idUser: u.idUser }, { allowOffline: false });
-      } else {
-        await window.apiPost('mulaiShift', { idUser: u.idUser, lat: position?.coords?.latitude ?? null, lng: position?.coords?.longitude ?? null, modalAwal: 0 }, { allowOffline: false });
-      }
-      await loadShift();
-      if (typeof window.toast === 'function') window.toast(active ? 'Shift selesai.' : 'Shift dimulai.', 'success');
-      render(document.querySelector('[data-screen="dashboard"]'));
+  async function changeShift(){
+    const u=user();if(!u||owner())return;
+    if(!window.AppState?.isOnline){window.toast?.('Mulai/selesai shift membutuhkan koneksi internet.','warn');return;}
+    const isActive=active();
+    const submit=async(pos)=>{
+      const btn=document.getElementById('dash-shift');if(btn)btn.disabled=true;
+      try{
+        if(isActive) await window.apiPost('selesaiShift',{idUser:u.idUser},{allowOffline:false});
+        else await window.apiPost('mulaiShift',{idUser:u.idUser,lat:pos?.coords?.latitude??null,lng:pos?.coords?.longitude??null,modalAwal:0},{allowOffline:false});
+        await refreshShift();
+        window.toast?.(isActive?'Shift selesai.':'Shift dimulai.','success');
+        window.renderDashboardFast?.(document.querySelector('[data-screen="dashboard"]'));
+      }catch(e){window.tampilkanError?.(e);}
+      finally{const b=document.getElementById('dash-shift');if(b)b.disabled=false;}
     };
-    try {
-      if (!active && u.wajibGPS && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(pos => submit(pos).catch(window.tampilkanError), () => window.toast?.('GPS wajib untuk memulai shift. Izinkan lokasi lalu coba lagi.', 'warn'), { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
-      } else await submit(null);
-    } catch (error) { if (typeof window.tampilkanError === 'function') window.tampilkanError(error); }
+    if(!isActive&&u.wajibGPS&&navigator.geolocation){navigator.geolocation.getCurrentPosition(p=>submit(p),()=>window.toast?.('GPS wajib untuk memulai shift. Izinkan lokasi lalu coba lagi.','warn'),{enableHighAccuracy:true,timeout:10000,maximumAge:30000});}
+    else submit(null);
   }
 
-  function render(root) {
-    const u = user();
-    if (!root || !u) return;
-    const primary = owner() ? 'stok' : 'kasir';
-    const primaryLabel = owner() ? 'Kelola Stok' : 'Transaksi Baru';
-    const primaryIcon = owner() ? '📦' : '🧾';
-    root.innerHTML = `
-      <div class="container">
-        <div class="card" style="background:linear-gradient(135deg,#ffffff,#eef9f6);">
-          <div style="font-size:19px;font-weight:900;">Selamat datang, ${esc(u.nama || u.username)}</div>
-          <div style="color:var(--text-dim);margin-top:4px;">${esc(u.role)} • <span data-dash-online>${window.AppState?.isOnline ? 'ONLINE' : 'OFFLINE'}</span></div>
+  function render(root){
+    const u=user();if(!root||!u)return;
+    window.renderDashboardFast=render;
+    const working=owner()||active();
+    root.innerHTML=`<div class="container">
+      <div class="card" style="background:linear-gradient(135deg,#fff,#eef9f6);padding:18px 18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+          <div style="min-width:0;flex:1"><div style="font-size:19px;font-weight:900;line-height:1.3">Selamat datang, ${esc(u.nama||u.username)}</div><div style="color:var(--text-dim);margin-top:4px">${esc(u.role)} • <span data-dash-online>${window.AppState?.isOnline?'ONLINE':'OFFLINE'}</span></div></div>
+          ${!owner()?`<button id="dash-shift" class="btn ${working?'btn-danger':'btn-primary'}" style="width:auto;min-width:142px;min-height:46px;box-shadow:0 8px 20px rgba(15,143,131,.16)">${working?'Selesai Shift':'Mulai Shift'}</button>`:''}
         </div>
-        ${!owner() ? '<div class="card"><div style="font-weight:800;">Shift</div><div id="dash-shift-status" style="margin-top:5px;color:var(--text-dim);">Memuat status shift…</div><button class="btn btn-primary btn-sm" id="dash-shift" style="margin-top:10px;">Memuat…</button></div>' : ''}
-        <div class="section-title">Ringkasan Hari Ini</div>
-        <div class="grid-2">
-          <div class="stat-card good"><div class="stat-label">Omzet Hari Ini</div><div class="stat-value" data-dash="omzet">—</div></div>
-          <div class="stat-card"><div class="stat-label">Transaksi</div><div class="stat-value" data-dash="transaksi">—</div></div>
-          <div class="stat-card warn"><div class="stat-label">Stok Menipis</div><div class="stat-value" data-dash="menipis">—</div></div>
-          <div class="stat-card danger"><div class="stat-label">Stok Habis</div><div class="stat-value" data-dash="habis">—</div></div>
-        </div>
-        <div class="section-title">Akses Utama</div>
-        <div class="grid-2">
-          <button class="btn btn-primary" data-fast-nav="${primary}">${primaryIcon} ${primaryLabel}</button>
-          ${owner() ? '<button class="btn btn-outline" data-fast-nav="kasir">🧾 Transaksi</button>' : ''}
-          <button class="btn btn-outline" data-fast-nav="pembelian">🚚 Pembelian</button>
-          <button class="btn btn-outline" data-fast-nav="pelanggan">👥 Pelanggan</button>
-          <button class="btn btn-outline" data-fast-nav="retur">↩️ Retur</button>
-          <button class="btn btn-outline" data-fast-nav="opname">📋 Stok Opname</button>
-          ${owner() ? '<button class="btn btn-outline" data-fast-nav="laporan">📊 Laporan</button><button class="btn btn-outline" data-fast-nav="users">👤 Pengguna</button>' : ''}
-        </div>
-        <div id="dash-alerts"></div>
-        <div class="card" style="margin-top:12px;"><div style="font-weight:800;">Sinkronisasi</div><div id="dash-sync" style="font-size:12px;color:var(--text-dim);margin-top:5px;">Memeriksa…</div><button class="btn btn-outline btn-sm" id="dash-sync-btn" style="margin-top:10px;">🔄 Sinkronkan Sekarang</button></div>
-        <div id="dash-analysis"></div>
-      </div>`;
+        ${!owner()&&!working?'<div style="margin-top:12px;padding:10px 12px;border-radius:12px;background:#fff7e6;color:#8a5b00;font-size:12px;font-weight:750">Shift belum dimulai. Menu operasional akan terbuka setelah Anda menekan <b>Mulai Shift</b>.</div>':''}
+      </div>
+      ${working?`<div class="section-title">Ringkasan Hari Ini</div><div class="grid-2"><div class="stat-card good"><div class="stat-label">Omzet Hari Ini</div><div class="stat-value" data-dash="omzet">—</div></div><div class="stat-card"><div class="stat-label">Transaksi</div><div class="stat-value" data-dash="transaksi">—</div></div><div class="stat-card warn"><div class="stat-label">Stok Menipis</div><div class="stat-value" data-dash="menipis">—</div></div><div class="stat-card danger"><div class="stat-label">Stok Habis</div><div class="stat-value" data-dash="habis">—</div></div></div>`:''}
+      <div class="section-title">${working?'Akses Utama':'Akses Terbatas'}</div>
+      <div class="grid-2">
+        ${working?`<button class="btn btn-primary" data-fast-nav="${owner()?'stok':'kasir'}">${owner()?'▣ Kelola Stok':'▤ Transaksi'}</button>`:'<button class="btn btn-primary" id="dash-start-main">▶ Mulai Shift</button>'}
+        ${working&&owner()?'<button class="btn btn-outline" data-fast-nav="kasir">▤ Transaksi</button>':''}
+        ${working?'<button class="btn btn-outline" data-fast-nav="pembelian">▱ Pembelian</button><button class="btn btn-outline" data-fast-nav="pelanggan">♧ Pelanggan</button><button class="btn btn-outline" data-fast-nav="retur">↶ Retur</button><button class="btn btn-outline" data-fast-nav="opname">▤ Stok Opname</button>':''}
+        ${working&&owner()?'<button class="btn btn-outline" data-fast-nav="laporan">◫ Laporan</button><button class="btn btn-outline" data-fast-nav="users">♙ Pengguna</button>':''}
+      </div>
+      ${working?'<div id="dash-alerts"></div><div class="card" style="margin-top:12px"><div style="font-weight:850">Sinkronisasi</div><div id="dash-sync" style="font-size:12px;color:var(--text-dim);margin-top:5px">Memeriksa…</div><button class="btn btn-outline btn-sm" id="dash-sync-btn" style="margin-top:10px">↻ Sinkronkan Sekarang</button></div><div id="dash-analysis"></div>':''}
+    </div>`;
 
-    root.querySelectorAll('[data-fast-nav]').forEach(btn => btn.onclick = () => nav(btn.dataset.fastNav));
-    root.querySelector('#dash-sync-btn')?.addEventListener('click', async () => { if (typeof window.sinkronkanOutbox === 'function') await window.sinkronkanOutbox(); render(root); });
+    root.querySelector('#dash-shift')?.addEventListener('click',changeShift);
+    root.querySelector('#dash-start-main')?.addEventListener('click',changeShift);
+    root.querySelectorAll('[data-fast-nav]').forEach(b=>b.onclick=()=>nav(b.dataset.fastNav));
+    root.querySelector('#dash-sync-btn')?.addEventListener('click',async()=>{await window.sinkronkanOutbox?.();render(root);});
 
-    const applySummary = s => {
-      if (!root.isConnected || window.AppState?.currentScreen !== 'dashboard') return;
-      s = s || {};
-      root.querySelector('[data-dash="omzet"]').textContent = money(s.omzetHariIni ?? s.penjualanHariIni ?? 0);
-      root.querySelector('[data-dash="transaksi"]').textContent = Number(s.transaksiHariIni ?? 0);
-      root.querySelector('[data-dash="menipis"]').textContent = Number(s.stokMenipis ?? 0);
-      root.querySelector('[data-dash="habis"]').textContent = Number(s.stokHabis ?? 0);
-      if (!owner() && root.querySelector('#dash-shift')) {
-        const shift = s.shift || user()?.shiftAktif || {};
-        const active = shift.status === 'Aktif';
-        root.querySelector('#dash-shift-status').textContent = active ? `Aktif sejak ${shift.mulai || '-'}` : 'Belum aktif';
-        root.querySelector('#dash-shift').textContent = active ? 'Selesai Shift' : 'Mulai Shift';
-        root.querySelector('#dash-shift').className = `btn ${active ? 'btn-danger' : 'btn-primary'} btn-sm`;
-        root.querySelector('#dash-shift').onclick = () => changeShift(active);
-      }
-      const alerts = [];
-      if (Number(s.kadaluarsaDekat || 0)) alerts.push(`<div class="card" style="border-left:4px solid var(--warning);"><b>⏰ ${Number(s.kadaluarsaDekat)} produk mendekati kadaluarsa</b><div class="li-sub">Periksa Kelola Stok.</div></div>`);
-      if (owner() && Number(s.pengajuanPending || 0)) alerts.push(`<div class="card" style="border-left:4px solid var(--info);"><b>📥 ${Number(s.pengajuanPending)} pengajuan menunggu persetujuan</b></div>`);
-      root.querySelector('#dash-alerts').innerHTML = alerts.join('');
-    };
-
-    const cached = typeof window.bacaCache === 'function' ? window.bacaCache('getDashboardSummary', { idUser: u.idUser }, CACHE_AGE) : Promise.resolve(null);
-    Promise.resolve(cached).then(data => { if (data) applySummary(data); }).catch(() => {});
-    Promise.resolve(window.jumlahOutbox ? window.jumlahOutbox() : 0).then(count => { const el = root.querySelector('#dash-sync'); if (el) el.textContent = count ? `${count} data menunggu sinkronisasi.` : 'Tidak ada data tertunda.'; }).catch(() => {});
-
-    if (!owner()) loadShift().then(shift => applySummary({ shift })).catch(() => {});
-    if (window.AppState?.isOnline && typeof window.apiGet === 'function') {
-      setTimeout(() => window.apiGet('getDashboardSummary', { idUser: u.idUser }, { cache: true, maxAge: 60 * 1000 }).then(applySummary).catch(() => {}), 0);
-      if (owner()) {
-        setTimeout(() => window.apiGet('getAnalisisPenjualan', {}, { cache: true, maxAge: 5 * 60 * 1000 }).then(a => {
-          if (!root.isConnected || !a) return;
-          root.querySelector('#dash-analysis').innerHTML = `<div class="section-title">Analisis Penjualan</div><div class="grid-2"><div class="stat-card"><div class="stat-label">Minggu ini</div><div class="stat-value">${money(a.omzetMingguIni)}</div><div class="li-sub">${Number(a.persenMingguan || 0).toFixed(1)}% vs minggu lalu</div></div><div class="stat-card"><div class="stat-label">Bulan ini</div><div class="stat-value">${money(a.omzetBulanIni)}</div><div class="li-sub">${Number(a.persenBulanan || 0).toFixed(1)}% vs bulan lalu</div></div></div>`;
-        }).catch(() => {}), 0);
-      }
-    }
+    if(!working)return;
+    const cached=typeof window.bacaCache==='function'?window.bacaCache('getDashboardSummary',{idUser:u.idUser},CACHE_AGE):Promise.resolve(null);
+    Promise.resolve(cached).then(s=>applySummary(s)).catch(()=>{});
+    Promise.resolve(window.jumlahOutbox?window.jumlahOutbox():0).then(n=>{const el=root.querySelector('#dash-sync');if(el)el.textContent=n?`${n} data menunggu sinkronisasi.`:'Tidak ada data tertunda.';}).catch(()=>{});
+    if(window.AppState?.isOnline&&typeof window.apiGet==='function')setTimeout(()=>window.apiGet('getDashboardSummary',{idUser:u.idUser},{cache:true,maxAge:CACHE_AGE}).then(applySummary).catch(()=>{}),0);
+    if(owner()&&window.AppState?.isOnline&&typeof window.apiGet==='function')setTimeout(()=>window.apiGet('getAnalisisPenjualan',{}, {cache:true,maxAge:5*60*1000}).then(a=>{if(!root.isConnected||!a)return;root.querySelector('#dash-analysis').innerHTML=`<div class="section-title">Analisis Penjualan</div><div class="grid-2"><div class="stat-card"><div class="stat-label">Minggu ini</div><div class="stat-value">${money(a.omzetMingguIni)}</div><div class="li-sub">${Number(a.persenMingguan||0).toFixed(1)}% vs minggu lalu</div></div><div class="stat-card"><div class="stat-label">Bulan ini</div><div class="stat-value">${money(a.omzetBulanIni)}</div><div class="li-sub">${Number(a.persenBulanan||0).toFixed(1)}% vs bulan lalu</div></div></div>`;}).catch(()=>{}),120);
   }
 
-  function install() {
-    if (window[INSTALLED]) return;
-    if (!window.SCREEN_RENDERERS || typeof window.apiGet !== 'function') { setTimeout(install, 50); return; }
-    window[INSTALLED] = true;
-    window.SCREEN_RENDERERS.dashboard = render;
-    window.__ANA_FARMA_DASHBOARD_PERF_VERSION__ = VERSION;
-    console.info('[DEV DASHBOARD PERF] installed', VERSION);
+  function applySummary(s){
+    const root=document.querySelector('[data-screen="dashboard"]');if(!root||!root.isConnected||window.AppState?.currentScreen!=='dashboard')return;s=s||{};
+    root.querySelector('[data-dash="omzet"]')&&(root.querySelector('[data-dash="omzet"]').textContent=money(s.omzetHariIni??s.penjualanHariIni??0));
+    root.querySelector('[data-dash="transaksi"]')&&(root.querySelector('[data-dash="transaksi"]').textContent=Number(s.transaksiHariIni??0));
+    root.querySelector('[data-dash="menipis"]')&&(root.querySelector('[data-dash="menipis"]').textContent=Number(s.stokMenipis??0));
+    root.querySelector('[data-dash="habis"]')&&(root.querySelector('[data-dash="habis"]').textContent=Number(s.stokHabis??0));
+    const alerts=[];if(Number(s.kadaluarsaDekat||0))alerts.push(`<div class="card" style="border-left:4px solid var(--warning);margin-top:12px"><b>⏰ ${Number(s.kadaluarsaDekat)} produk mendekati kadaluarsa</b><div class="li-sub">Periksa Kelola Stok.</div></div>`);if(owner()&&Number(s.pengajuanPending||0))alerts.push(`<div class="card" style="border-left:4px solid var(--info);margin-top:12px"><b>📥 ${Number(s.pengajuanPending)} pengajuan menunggu persetujuan</b></div>`);const el=root.querySelector('#dash-alerts');if(el)el.innerHTML=alerts.join('');
   }
+
+  function install(){if(window[INSTALLED])return;if(!window.SCREEN_RENDERERS||typeof window.apiGet!=='function'||!window.AppState){setTimeout(install,50);return;}window[INSTALLED]=true;window.SCREEN_RENDERERS.dashboard=render;window.__ANA_FARMA_DASHBOARD_VERSION__=VERSION;console.info('[DEV DASHBOARD]',VERSION);}
   install();
 })();
