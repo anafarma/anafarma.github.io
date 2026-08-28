@@ -8,9 +8,12 @@
  * 2. AppState.lokasiCache = [] dianggap "sudah dimuat", sehingga modal
  *    tidak mencoba memuat ulang.
  * 3. Perubahan data Lokasi_Rak di backend tidak langsung terlihat di modal.
+ * 4. Backend terbaru tetap memvalidasi sesi untuk getLokasi, sehingga
+ *    refresh langsung juga wajib mengirim idUser.
  *
  * Strategi:
  * - Ambil lokasi secara fresh saat aplikasi sudah siap.
+ * - Kirim idUser dari sesi aktif pada request getLokasi.
  * - Saat modal Edit/Tambah Obat muncul, refresh fresh bila daftar kosong.
  * - Tidak menghapus nilai lokasi yang sedang dipilih.
  * - Tidak mengubah API bisnis, schema database, atau hak akses.
@@ -18,7 +21,7 @@
 (function () {
   'use strict';
 
-  const LOCATION_FIX_VERSION = '20260828-LOCATION-RACK-FIX-1';
+  const LOCATION_FIX_VERSION = '20260829-LOCATION-RACK-FIX-2';
   const MAX_WAIT = 12000;
   const WAIT_STEP = 50;
 
@@ -48,8 +51,12 @@
   async function fetchLocationsFresh() {
     if (!window.AppState || !window.AppState.user || !window.API_URL) return [];
 
+    const idUser = String(window.AppState.user.idUser || '').trim();
+    if (!idUser) return [];
+
     const url = new URL(window.API_URL);
     url.searchParams.set('action', 'getLokasi');
+    url.searchParams.set('idUser', idUser);
     url.searchParams.set('_location_refresh', String(Date.now()));
 
     try {
@@ -67,7 +74,7 @@
 
       // Simpan hasil non-kosong ke cache standar agar offline/read cepat tetap ada.
       if (list.length && typeof window.simpanCache === 'function') {
-        window.simpanCache('getLokasi', {}, list).catch(function () {});
+        window.simpanCache('getLokasi', { idUser: idUser }, list).catch(function () {});
       }
       return list;
     } catch (error) {
