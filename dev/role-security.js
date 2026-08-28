@@ -1,93 +1,36 @@
 /*
- * APOTEK ANA FARMA — DEV ROLE SECURITY V18.8
- *
- * Defense-in-depth di frontend. Backend tetap menjadi otoritas terakhir.
- * Pegawai tidak boleh menjalankan mutation Owner-only walaupun mencoba
- * memanggil API dari console/UI secara langsung.
+ * APOTEK ANA FARMA — DEV ROLE/SESSION/PURCHASE SECURITY V19.0
+ * Defense-in-depth: Owner-only actions, persistent session, mandatory
+ * employee shift, and purchase-unit (PCS/BOX) support.
  */
-(function () {
-  'use strict';
-
-  const VERSION = '2026-08-27-DEV-ROLE-SECURITY-18-8';
-  const OWNER_ONLY_ACTIONS = new Set([
-    'addProduk', 'updateProduk', 'adjustStok',
-    'addSupplier', 'updateSupplier',
-    'updatePengaturan',
-    'gantiPassword',
-    'updateUser', 'toggleGPSUser', 'resetPasswordUser',
-    'setujuiPengajuanPembelian', 'tolakPengajuanPembelian'
-  ]);
-
-  function normalizeRole() {
-    const u = window.AppState?.user;
-    if (!u) return;
-    const role = String(u.role || '').trim().toLowerCase();
-    if (role === 'owner') u.role = 'Owner';
-    else if (role === 'pegawai' || role === 'employee' || role === 'karyawan') u.role = 'Pegawai';
-  }
-
-  function isOwner() {
-    normalizeRole();
-    return String(window.AppState?.user?.role || '').trim().toLowerCase() === 'owner';
-  }
-
-  function install() {
-    if (window.__ANA_FARMA_ROLE_SECURITY__) return;
-    if (typeof window.apiPost !== 'function' || !window.AppState) {
-      setTimeout(install, 50);
-      return;
-    }
-    window.__ANA_FARMA_ROLE_SECURITY__ = true;
-    normalizeRole();
-
-    const originalPost = window.apiPost;
-    const guardedPost = function (action, data, options) {
-      normalizeRole();
-      if (!isOwner() && OWNER_ONLY_ACTIONS.has(String(action))) {
-        const error = new Error('Aksi ini hanya dapat dilakukan oleh Owner.');
-        error.kind = 'authorization';
-        if (typeof window.toast === 'function') window.toast(error.message, 'warn');
-        return Promise.reject(error);
-      }
-      return originalPost.call(this, action, data, options);
-    };
-    guardedPost.__devRoleGuard = true;
-    guardedPost.__devOriginal = originalPost;
-    window.apiPost = guardedPost;
-
-    const observer = new MutationObserver(() => {
-      normalizeRole();
-      if (isOwner()) return;
-      const profile = document.querySelector('[data-screen="profil"]');
-      profile?.querySelectorAll('#pf-pass, [data-action="change-password"]').forEach(el => {
-        el.classList.add('hidden');
-        el.setAttribute('aria-hidden', 'true');
-        el.setAttribute('disabled', 'disabled');
-      });
-      profile?.querySelectorAll('button').forEach(btn => {
-        if (/ganti\s+password/i.test(btn.textContent || '')) {
-          btn.classList.add('hidden');
-          btn.setAttribute('disabled', 'disabled');
-        }
-      });
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    document.addEventListener('click', event => {
-      normalizeRole();
-      if (isOwner()) return;
-      const button = event.target.closest('button');
-      if (!button) return;
-      if (/ganti\s+password/i.test(button.textContent || '')) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (typeof window.toast === 'function') window.toast('Penggantian password hanya dapat dilakukan oleh Owner.', 'warn');
-      }
-    }, true);
-
-    window.__ANA_FARMA_DEV_ROLE_SECURITY_VERSION__ = VERSION;
-    console.info('[DEV ROLE SECURITY] installed', VERSION);
-  }
-
-  install();
+(function(){
+'use strict';
+const VERSION='2026-08-28-DEV-ROLE-SECURITY-19-0';
+const OWNER_ONLY=new Set(['addProduk','updateProduk','adjustStok','addSupplier','updateSupplier','updatePengaturan','gantiPassword','updateUser','toggleGPSUser','resetPasswordUser','setujuiPengajuanPembelian','tolakPengajuanPembelian']);
+const SHIFT_REQUIRED=new Set(['createTransaksi','addPengajuanPembelian','addRetur','simpanStokOpname','updatePelanggan','addPelanggan']);
+const u=()=>window.AppState?.user||null;
+const owner=()=>String(u()?.role||'').trim().toLowerCase()==='owner';
+const shift=()=>{const s=u()?.shiftAktif;return !!(s&&(s.status==='Aktif'||s.status==='active'||s.aktif===true));};
+const esc=v=>typeof window.escapeHtml==='function'?window.escapeHtml(v):String(v??'');
+const money=v=>typeof window.formatRupiah==='function'?window.formatRupiah(v):`Rp ${Number(v||0).toLocaleString('id-ID')}`;
+const online=()=>!!window.AppState?.isOnline;
+function normalizeRole(){const x=u();if(!x)return;const r=String(x.role||'').trim().toLowerCase();if(r==='owner')x.role='Owner';else if(['pegawai','employee','karyawan'].includes(r))x.role='Pegawai';}
+function persist(){const x=u();if(!x)return;try{localStorage.setItem('anafarma_sesi_v2',JSON.stringify({user:x,savedAt:Date.now()}));}catch(_){} }
+function installApiGuards(){if(window.__ANA_FARMA_ROLE_SECURITY_19__)return;if(!window.AppState||typeof window.apiPost!=='function'){setTimeout(installApiGuards,40);return;}window.__ANA_FARMA_ROLE_SECURITY_19__=true;normalizeRole();const original=window.apiPost;window.apiPost=function(action,data,options){normalizeRole();const a=String(action||'');if(!owner()&&OWNER_ONLY.has(a)){const e=new Error('Aksi ini hanya dapat dilakukan oleh Owner.');e.kind='authorization';window.toast?.(e.message,'warn');return Promise.reject(e);}if(!owner()&&SHIFT_REQUIRED.has(a)&&!shift()){const e=new Error('Mulai shift terlebih dahulu sebelum melakukan kegiatan operasional.');e.kind='shift-required';window.toast?.(e.message,'warn');return Promise.reject(e);}return original.call(this,action,data,options);};window.apiPost.__devRoleGuard=true;}
+function disableAutoLogout(){if(window.AppState?.autoLogoutTimer)clearTimeout(window.AppState.autoLogoutTimer);if(window.AppState)window.AppState.autoLogoutTimer=null;window.scheduleAutoLogout=function(){if(window.AppState?.autoLogoutTimer)clearTimeout(window.AppState.autoLogoutTimer);if(window.AppState)window.AppState.autoLogoutTimer=null;};window.resetAutoLogoutTimer=window.scheduleAutoLogout;}
+function purchaseModalHelpers(){
+  const field=(id,label,value='',type='text',extra='')=>`<div class="form-group"><label for="${id}">${esc(label)}</label><input id="${id}" type="${type}" value="${esc(value)}" ${extra}></div>`;
+  const select=(id,label,opts)=>`<div class="form-group"><label for="${id}">${esc(label)}</label><select id="${id}">${opts.map(x=>`<option value="${esc(x.value)}">${esc(x.label)}</option>`).join('')}</select></div>`;
+  const open=(title,body,mount)=>{const r=document.getElementById('modal-root');if(!r)return;r.innerHTML=`<div class="modal-overlay center-align" data-pu19><div class="modal-sheet modal-center" style="width:min(100%,520px)"><div class="modal-header"><h3>${esc(title)}</h3><button class="modal-close" data-pu-close>×</button></div><div class="modal-body">${body}</div></div></div>`;const o=r.querySelector('[data-pu19]');r.querySelector('[data-pu-close]').onclick=close;o.onclick=e=>{if(e.target===o)close();};requestAnimationFrame(()=>o.classList.add('show'));r.querySelectorAll('[data-pu-cancel]').forEach(b=>b.onclick=close);mount?.(r);};
+  const close=()=>{const r=document.getElementById('modal-root'),o=r?.querySelector('[data-pu19]');if(!o)return;o.classList.remove('show');setTimeout(()=>{if(r)r.innerHTML='';},180);};
+  async function products(){const d=await window.apiGet('getProduk',{idUser:u()?.idUser},{cache:true,maxAge:60*60*1000});return(Array.isArray(d)?d:[]).map(p=>({raw:p,kode:String(p.Kode_Obat??p.kodeObat??p.kode??''),nama:String(p.Nama_Obat??p.namaObat??p.nama??''),satuan:String(p.Satuan??p.satuan??'Pcs').trim()||'Pcs',satuanBeli:String(p.Satuan_Beli??p.satuanBeli??'').trim(),isiBeli:Math.max(1,Number(p.Isi_Per_Satuan_Beli??p.isiPerSatuanBeli??1)||1),hargaBeli:Number(p.Harga_Beli??p.hargaBeli??0)||0}));}
+  const units=p=>[{value:'pcs',label:p.satuan,isi:1}].concat(p.satuanBeli&&p.isiBeli>1?[{value:'box',label:p.satuanBeli,isi:p.isiBeli}]:[]);
+  async function direct(){if(!owner()){window.toast?.('Pembelian langsung hanya dapat dilakukan Owner.','warn');return;}if(!online()){window.toast?.('Pembelian membutuhkan koneksi internet.','warn');return;}const ps=await products(),ss=await window.apiGet('getSupplier',{}, {cache:true,maxAge:30*60*1000}).catch(()=>[]);open('Pembelian Langsung',`${select('pu-kode','Obat',ps.map(p=>({value:p.kode,label:`${p.nama} (${p.kode})`})))}${select('pu-unit','Satuan Pembelian',[{value:'pcs',label:'Memuat…'}])}<div id="pu-note" class="form-hint"></div>${field('pu-qty','Jumlah',1,'number','min="1" inputmode="numeric"')}${field('pu-price','Harga per Satuan Pembelian',0,'number','min="0" inputmode="numeric"')}${select('pu-sup','Supplier',[{value:'',label:'-- Supplier --'}].concat((Array.isArray(ss)?ss:[]).map(s=>({value:s.ID_Supplier,label:s.Nama_Supplier}))))}${field('pu-faktur','No. Faktur','')}${field('pu-tgl','Tanggal Faktur',new Date().toISOString().slice(0,10),'date')}${field('pu-batch','No. Batch','')}${field('pu-exp','Expired','','date')}<div class="btn-row"><button class="btn btn-secondary" data-pu-cancel>Batal</button><button class="btn btn-primary" id="pu-save">Simpan</button></div>`,root=>{const k=root.querySelector('#pu-kode'),unit=root.querySelector('#pu-unit'),note=root.querySelector('#pu-note'),price=root.querySelector('#pu-price');const getP=()=>ps.find(p=>p.kode===k.value);function draw(){const p=getP(),opts=p?units(p):[];unit.innerHTML=opts.map(x=>`<option value="${x.value}">${esc(x.label)}</option>`).join('')||'<option value="pcs">Pcs</option>';if(p){note.textContent=opts.length>1?`1 ${p.satuanBeli} = ${p.isiBeli} ${p.satuan}. Harga diisi per ${p.satuanBeli}.`:`Pembelian dicatat dalam ${p.satuan}.`;price.value=p.hargaBeli?String(p.hargaBeli*(unit.value==='box'?p.isiBeli:1)):'';}}k.onchange=draw;unit.onchange=draw;draw();root.querySelector('#pu-save').onclick=async()=>{const p=getP(),v=units(p||{}).find(x=>x.value===unit.value),qty=Math.floor(Number(root.querySelector('#pu-qty').value)),harga=Number(price.value);if(!p||!v||qty<=0||!Number.isFinite(harga)||harga<0){window.toast?.('Data pembelian belum valid.','warn');return;}const sup=root.querySelector('#pu-sup'),payload={idUser:u().idUser,kodeObat:p.kode,idSupplier:sup.value,namaSupplier:sup.selectedOptions[0]?.textContent||'',qtySatuanBeli:qty,hargaBeliPerSatuanBeli:harga,satuanBeli:v.value==='box'?p.satuanBeli:p.satuan,isiPerSatuanBeli:v.isi,noFaktur:root.querySelector('#pu-faktur').value.trim(),tanggalFaktur:root.querySelector('#pu-tgl').value,noBatch:root.querySelector('#pu-batch').value.trim(),expired:root.querySelector('#pu-exp').value};const b=root.querySelector('#pu-save');b.disabled=true;try{await window.apiPost('addPembelian',payload,{allowOffline:false});close();window.toast?.(`Pembelian ${qty} ${payload.satuanBeli} berhasil disimpan.`,'success');window.navigasiKe?.('pembelian');}catch(e){window.tampilkanError?.(e);b.disabled=false;}};});}
+  async function request(){if(owner())return direct();if(!online()){window.toast?.('Pengajuan pembelian membutuhkan koneksi internet.','warn');return;}const ps=await products(),ss=await window.apiGet('getSupplier',{}, {cache:true,maxAge:30*60*1000}).catch(()=>[]);open('Ajukan Barang Masuk',`${select('rq-kode','Obat (kosong = produk baru)',[{value:'',label:'-- Produk baru --'}].concat(ps.map(p=>({value:p.kode,label:`${p.nama} (${p.kode})`})) ))}${field('rq-nama','Nama Obat','')}${select('rq-unit','Satuan Pembelian',[{value:'Pcs',label:'Pcs'}])}${field('rq-isi','Isi per Satuan',1,'number','min="1"')}${field('rq-jumlah','Jumlah Pembelian',1,'number','min="1"')}${field('rq-jenis','Jenis/Kategori','Umum')}${field('rq-exp','Expired','','date')}${select('rq-sup','Supplier',[{value:'',label:'-- Supplier --'}].concat((Array.isArray(ss)?ss:[]).map(s=>({value:s.ID_Supplier,label:s.Nama_Supplier}))))}${field('rq-faktur','No. Faktur','')}${field('rq-tgl','Tanggal Faktur',new Date().toISOString().slice(0,10),'date')}${field('rq-batch','No. Batch','')}<div class="btn-row"><button class="btn btn-secondary" data-pu-cancel>Batal</button><button class="btn btn-primary" id="rq-save">Ajukan</button></div>`,root=>{const k=root.querySelector('#rq-kode'),unit=root.querySelector('#rq-unit'),isi=root.querySelector('#rq-isi');const draw=()=>{const p=ps.find(x=>x.kode===k.value);if(p){root.querySelector('#rq-nama').value=p.nama;const opts=units(p);unit.innerHTML=opts.map(x=>`<option value="${esc(x.label)}" data-isi="${x.isi}">${esc(x.label)}</option>`).join('');isi.value=opts[1]?.isi||1;}else{unit.innerHTML='<option value="Pcs" data-isi="1">Pcs</option>';isi.value=1;}};k.onchange=draw;draw();root.querySelector('#rq-save').onclick=async()=>{const b=root.querySelector('#rq-save'),qty=Math.floor(Number(root.querySelector('#rq-jumlah').value));if(!root.querySelector('#rq-nama').value.trim()||qty<=0){window.toast?.('Nama obat dan jumlah wajib valid.','warn');return;}b.disabled=true;try{const sup=root.querySelector('#rq-sup');await window.apiPost('addPengajuanPembelian',{idUser:u().idUser,kodeObat:k.value,namaObat:root.querySelector('#rq-nama').value.trim(),jumlah:qty,jenis:root.querySelector('#rq-jenis').value.trim(),satuanBeli:unit.value,isiPerSatuanBeli:Math.max(1,Number(isi.value)||1),expired:root.querySelector('#rq-exp').value,noFaktur:root.querySelector('#rq-faktur').value.trim(),tanggalFaktur:root.querySelector('#rq-tgl').value,noBatch:root.querySelector('#rq-batch').value.trim(),idSupplier:sup.value,namaSupplier:sup.selectedOptions[0]?.textContent||''});close();window.toast?.('Pengajuan pembelian berhasil dikirim.','success');window.navigasiKe?.('pembelian');}catch(e){window.tampilkanError?.(e);b.disabled=false;}};});}
+  function installPurchase(){if(!window.SCREEN_RENDERERS||typeof window.apiGet!=='function'||typeof window.apiPost!=='function'){setTimeout(installPurchase,50);return;}window.SCREEN_RENDERERS.pembelian=async function(root){if(!root||!u())return;root.innerHTML=`<div class="container"><div class="section-title">Pembelian & Pengajuan</div><div class="btn-row"><button class="btn btn-primary" id="pu-add">${owner()?'+ Pembelian Langsung':'+ Ajukan Barang Masuk'}</button><button class="btn btn-outline" id="pu-refresh">↻ Muat Ulang</button></div><div id="pu-list" class="card" style="margin-top:10px">Memuat…</div></div>`;const list=root.querySelector('#pu-list');try{const [r,p]=await Promise.all([window.apiGet('getPembelian',{}, {cache:true,maxAge:5*60*1000}),window.apiGet('getPengajuanPembelian',{idUser:u().idUser},{cache:true,maxAge:60*1000})]);const rows=Array.isArray(r)?r:[],pend=Array.isArray(p)?p:[];list.innerHTML=`<div class="section-title">Pengajuan</div>${pend.map(x=>`<div class="list-item"><div class="li-main"><div class="li-title">${esc(x.Nama_Obat)} • ${esc(x.Jumlah)}</div><div class="li-sub">${esc(x.Diajukan_Oleh||'-')} • ${esc(x.Status||'-')}</div><div class="li-sub">Satuan: ${esc(x.Satuan_Beli||x.satuanBeli||'Pcs')} • Isi: ${Number(x.Isi_Per_Satuan_Beli||x.isiPerSatuanBeli||1)}</div></div><div class="li-right">${owner()&&x.Status==='Menunggu'?`<button class="btn btn-primary btn-sm" data-pu-approve="${esc(x.ID_Pengajuan)}">Setujui</button>`:`<span class="pill pill-warn">${esc(x.Status||'-')}</span>`}</div></div>`).join('')||'<div class="empty-state">Tidak ada pengajuan.</div>'}<div class="section-title">Riwayat Pembelian</div>${rows.map(x=>`<div class="list-item"><div class="li-main"><div class="li-title">${esc(x.Nama_Obat||'-')}</div><div class="li-sub">${esc(x.Nama_Supplier||'-')} • ${esc(x.No_Faktur||'-')}</div><div class="li-sub">${esc(x.Tanggal||'-')} • ${esc(x.Satuan_Beli||x.satuanBeli||'Pcs')} • Qty ${esc(x.Qty||x.Qty_Satuan_Beli||'-')}</div></div><div class="li-right"><div class="li-value">${money(x.Total||0)}</div></div></div>`).join('')||'<div class="empty-state">Belum ada pembelian.</div>'}`;}catch(e){list.innerHTML=`<div class="empty-state">Gagal memuat pembelian.<br><small>${esc(e.message||String(e))}</small></div>`;}root.querySelector('#pu-add').onclick=owner()?direct:request;root.querySelector('#pu-refresh').onclick=()=>window.navigasiKe?.('pembelian');root.querySelectorAll('[data-pu-approve]').forEach(b=>b.onclick=()=>approve(b.dataset.puApprove));};}
+  async function approve(id){if(!owner()||!online())return;open('Persetujuan Pengajuan',`${field('pa-hb','Harga Beli Satuan',0,'number','min="0"')}${field('pa-hj','Harga Jual',0,'number','min="0"')}<div class="form-group"><label><input id="pa-update" type="checkbox"> Perbarui harga jual master</label></div><div class="btn-row"><button class="btn btn-secondary" data-pu-cancel>Batal</button><button class="btn btn-primary" id="pa-save">Setujui</button></div>`,root=>{root.querySelector('#pa-save').onclick=async()=>{try{await window.apiPost('setujuiPengajuanPembelian',{idUser:u().idUser,idPengajuan:id,hargaBeliSatuan:Number(root.querySelector('#pa-hb').value||0),hargaJual:Number(root.querySelector('#pa-hj').value||0),perbaruiHargaJual:root.querySelector('#pa-update').checked});close();window.navigasiKe?.('pembelian');}catch(e){window.tampilkanError?.(e);}};});}
+  return{installPurchase};
+}
+function boot(){normalizeRole();disableAutoLogout();installApiGuards();const p=purchaseModalHelpers();p.installPurchase();['visibilitychange','pageshow','focus'].forEach(e=>window.addEventListener(e,persist));window.AnaFarmaSessionPolicy={version:VERSION,isShiftActive:shift,canOperate:()=>owner()||shift(),persist};window.__ANA_FARMA_DEV_ROLE_SECURITY_VERSION__=VERSION;console.info('[DEV SECURITY]',VERSION);}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
