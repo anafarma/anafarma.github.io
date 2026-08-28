@@ -17,9 +17,9 @@
  * =====================================================================
  */
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbxcAPMcgyu7eNyEISUvIJHs0grSIFJCJ_DOnM2wX_b2gWfWUn9VSUi4sF81X9ndz5JU/exec';
-const API_DEPLOYMENT_ID = 'AKfycbxcAPMcgyu7eNyEISUvIJHs0grSIFJCJ_DOnM2wX_b2gWfWUn9VSUi4sF81X9ndz5JU';
-const APP_VERSION = '2026-08-27-DEV-OFFLINE-V18-2';
+const API_URL = 'https://script.google.com/macros/s/AKfycbxsXBhnitGIOqd69aSx0c7ABZpsnwrnyCGtNa-OLjiWhrVt18KaIBSs8O4nSUf-uTcitA/exec';
+const API_DEPLOYMENT_ID = 'AKfycbxsXBhnitGIOqd69aSx0c7ABZpsnwrnyCGtNa-OLjiWhrVt18KaIBSs8O4nSUf-uTcitA';
+const APP_VERSION = '2026-08-28-DEV-OFFLINE-V18-3';
 const STORAGE_KEY = 'anafarma_sesi_v2';
 const DB_NAME = 'anafarma_offline_v2';
 const DB_VERSION = 1;
