@@ -1,5 +1,5 @@
-/** APOTEK ANA FARMA — DEV SERVICE WORKER V18.11 — DEV ONLY */
-const CACHE_VERSION='ana-farma-dev-v18-11';
+/** APOTEK ANA FARMA — DEV SERVICE WORKER V19.0 */
+const CACHE_VERSION='ana-farma-dev-v19-0';
 const NAV_TIMEOUT_MS=2500;
 const SCRIPT_TIMEOUT_MS=2200;
 const API_URL='https://script.google.com/macros/s/AKfycbxcAPMcgyu7eNyEISUvIJHs0grSIFJCJ_DOnM2wX_b2gWfWUn9VSUi4sF81X9ndz5JU/exec';
