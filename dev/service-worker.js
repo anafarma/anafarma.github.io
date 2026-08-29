@@ -1,15 +1,18 @@
-/** APOTEK ANA FARMA — DEV SERVICE WORKER V19.3 */
-const CACHE_VERSION='ana-farma-dev-v19-3';
+/** APOTEK ANA FARMA — DEV SERVICE WORKER V19.4 */
+const CACHE_VERSION='ana-farma-dev-v19-4';
 const NAV_TIMEOUT_MS=2500;
 const SCRIPT_TIMEOUT_MS=2200;
-const API_URL='https://script.google.com/macros/s/AKfycbxsXBhnitGIOqd69aSx0c7ABZpsnwrnyCGtNa-OLjiWhrVt18KaIBSs8O4nSUf-uTcitA/exec';
-const LEGACY_API_URL='https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec';
-const LEGACY_API_PATH=new URL(LEGACY_API_URL).origin+new URL(LEGACY_API_URL).pathname;
+const API_URL='https://script.google.com/macros/s/AKfycbwIwBcjBfV64-W-nk4sjdvAnO-uKr3wV2Hm_NIliqqWAGRME-NAxoghuMz9-c4joXSUYQ/exec';
+const KNOWN_API_PATHS=new Set([
+  new URL(API_URL).origin+new URL(API_URL).pathname,
+  'https://script.google.com/macros/s/AKfycbxsXBhnitGIOqd69aSx0c7ABZpsnwrnyCGtNa-OLjiWhrVt18KaIBSs8O4nSUf-uTcitA/exec',
+  'https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec'
+]);
 const APP_SHELL=['./','./index.html','./app.js','./logo_data.js','./api-context.js','./feature-compat.js','./features-runtime.js','./navigation-shell.js','./premium-ui.js','./role-security.js','./users-gps-fix.js','./dashboard-performance.js','./kasir-performance.js','./location-rak-fix.js','./manifest.json','./icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 function absolute(path){return new URL(path,self.registration.scope).href;}
 function isAppsScript(url){return url.hostname==='script.google.com'||url.hostname==='script.googleusercontent.com'||url.hostname.endsWith('.googleusercontent.com');}
 function sameOrigin(url){return url.origin===self.location.origin;}
-function normalizeApiRequest(request){const incoming=new URL(request.url);if(incoming.origin+incoming.pathname!==LEGACY_API_PATH)return request;const target=new URL(API_URL);target.search=incoming.search;return new Request(target.href,request);}
+function normalizeApiRequest(request){const incoming=new URL(request.url);const path=incoming.origin+incoming.pathname;if(!KNOWN_API_PATHS.has(path))return request;const target=new URL(API_URL);target.search=incoming.search;return new Request(target.href,request);}
 async function fetchTimeout(request,ms){const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),ms);try{return await fetch(request,{signal:controller.signal,cache:'no-store'});}finally{clearTimeout(timer);}}
 async function cachePut(request,response){if(!response||!response.ok)return;try{const cache=await caches.open(CACHE_VERSION);await cache.put(request,response.clone());}catch(error){console.warn('[DEV SW CACHE]',error);}}
 async function installShell(){const cache=await caches.open(CACHE_VERSION);await Promise.all(APP_SHELL.map(async path=>{try{const response=await fetch(absolute(path),{cache:'no-store'});if(response.ok)await cache.put(absolute(path),response.clone());}catch(error){console.warn('[DEV SW INSTALL]',path,error);}}));}
