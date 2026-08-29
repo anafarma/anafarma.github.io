@@ -2,13 +2,8 @@
  * APOTEK ANA FARMA — DEV USER MANAGEMENT / GPS FIX
  * 2026-08-29
  *
- * Replaces the previous users renderer that accidentally INVOKED toggleGps()
- * while binding buttons. The old pattern was:
- *   forEach(b => toggleGps(...))
- * which executed immediately on every render, causing GPS TRUE/FALSE to flip
- * repeatedly and recursively reloading the users screen.
- *
- * This module owns the users screen UI and binds real click handlers only.
+ * Single owner of the users screen mutation handlers.
+ * GPS changes are click-only and deterministic; rendering never mutates data.
  */
 (function () {
   'use strict';
@@ -22,6 +17,15 @@
     : String(v ?? '').replace(/[&<>\"']/g, c => ({
         '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'
       }[c]));
+
+  function toBool(value, fallback = false) {
+    if (value === true || value === false) return value;
+    if (typeof value === 'number') return value !== 0;
+    const s = String(value ?? '').trim().toLowerCase();
+    if (['true','1','yes','ya','on','aktif','wajib'].includes(s)) return true;
+    if (['false','0','no','tidak','off','nonaktif','tidak wajib'].includes(s)) return false;
+    return fallback;
+  }
 
   const owner = () => String(window.AppState?.user?.role || '').trim().toLowerCase() === 'owner';
   const online = () => !!window.AppState?.isOnline;
@@ -75,16 +79,19 @@
       return;
     }
 
+    const currentGps = toBool(target.wajibGPS, false);
+    const nextGps = !currentGps;
     const buttons = document.querySelectorAll('[data-users-fix-gps]');
     buttons.forEach(b => { b.disabled = true; b.setAttribute('aria-busy', 'true'); });
 
     try {
-      await window.apiPost('toggleGPSUser', {
+      const result = await window.apiPost('toggleGPSUser', {
         idUser: window.AppState.user.idUser,
         targetUserId: target.idUser,
-        wajibGPS: !Boolean(target.wajibGPS)
+        wajibGPS: nextGps
       });
-      toast(`GPS ${target.nama || target.username} sekarang ${target.wajibGPS ? 'tidak wajib' : 'wajib'}.`, 'success');
+      const persisted = toBool(result?.wajibGPS, nextGps);
+      toast(`GPS ${target.nama || target.username} sekarang ${persisted ? 'wajib' : 'tidak wajib'}.`, 'success');
       await renderUsers();
     } catch (e) {
       window.tampilkanError?.(e);
@@ -105,7 +112,7 @@
       `${field('uf-nama', 'Nama', editing ? user.nama : '')}` +
       `${select('uf-role', 'Role', [{value:'Pegawai',label:'Pegawai'},{value:'Owner',label:'Owner'}], editing ? user.role : 'Pegawai')}` +
       `${editing ? '' : field('uf-pass', 'Password Awal', '12345678', 'password')}` +
-      `<div class="form-group"><label><input id="uf-aktif" type="checkbox" ${!editing || user.aktif ? 'checked' : ''}> Aktif</label></div>` +
+      `<div class="form-group"><label><input id="uf-aktif" type="checkbox" ${!editing || toBool(user.aktif, true) ? 'checked' : ''}> Aktif</label></div>` +
       `<div class="btn-row"><button class="btn btn-secondary" id="uf-cancel">Batal</button><button class="btn btn-primary" id="uf-save">Simpan</button></div>` +
       `${editing ? '<button class="btn btn-outline" id="uf-reset" style="margin-top:8px;">Reset Password</button>' : ''}`,
       root => {
@@ -176,19 +183,23 @@
       </div>`;
 
       const list = root.querySelector('#users-fix-list');
-      list.innerHTML = rows.map(u => `<div class="list-item">
-        <div class="li-main">
-          <div class="li-title">${esc(u.nama)} • ${esc(u.username)}</div>
-          <div class="li-sub">${esc(u.role)} • ${u.wajibGPS ? 'GPS wajib' : 'GPS tidak wajib'}</div>
-        </div>
-        <div class="li-right">
-          <span class="pill ${u.aktif ? 'pill-success' : 'pill-danger'}">${u.aktif ? 'Aktif' : 'Nonaktif'}</span>
-          <div style="display:flex;gap:4px;margin-top:5px;">
-            <button type="button" class="btn btn-outline btn-sm" data-users-fix-edit="${esc(u.idUser)}">Edit</button>
-            <button type="button" class="btn btn-outline btn-sm" data-users-fix-gps="${esc(u.idUser)}">GPS</button>
+      list.innerHTML = rows.map(u => {
+        const gps = toBool(u.wajibGPS, false);
+        const aktif = toBool(u.aktif, true);
+        return `<div class="list-item">
+          <div class="li-main">
+            <div class="li-title">${esc(u.nama)} • ${esc(u.username)}</div>
+            <div class="li-sub">${esc(u.role)} • ${gps ? 'GPS wajib' : 'GPS tidak wajib'}</div>
           </div>
-        </div>
-      </div>`).join('') || '<div class="empty-state">Belum ada pengguna.</div>';
+          <div class="li-right">
+            <span class="pill ${aktif ? 'pill-success' : 'pill-danger'}">${aktif ? 'Aktif' : 'Nonaktif'}</span>
+            <div style="display:flex;gap:4px;margin-top:5px;">
+              <button type="button" class="btn btn-outline btn-sm" data-users-fix-edit="${esc(u.idUser)}">Edit</button>
+              <button type="button" class="btn btn-outline btn-sm" data-users-fix-gps="${esc(u.idUser)}">GPS</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('') || '<div class="empty-state">Belum ada pengguna.</div>';
 
       root.querySelector('#users-fix-add').onclick = () => userModal(null);
       list.querySelectorAll('[data-users-fix-edit]').forEach(button => {
