@@ -1,0 +1,30 @@
+name: DEV Browser QA
+
+on:
+  push:
+    branches:
+      - 'dev/**'
+    paths:
+      - 'dev/**'
+      - '.github/workflows/dev-browser-qa.yml'
+  pull_request:
+    paths:
+      - 'dev/**'
+      - '.github/workflows/dev-browser-qa.yml'
+
+jobs:
+  browser-qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        run: npm install --no-save --no-package-lock @playwright/test@1.55.0
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Serve DEV QA harness
+        run: python3 -m http.server 4173 --directory dev >/tmp/anafarma-qa.log 2>&1 &
+      - name: Run responsive browser tests
+        run: npx playwright test dev/qa-browser.spec.js --workers=1
