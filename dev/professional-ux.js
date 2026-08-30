@@ -5,6 +5,35 @@
 (function(){
 'use strict';
 const ID='ana-professional-ux';
+const CANONICAL_API='https://script.google.com/macros/s/AKfycbwIwBcjBfV64-W-nk4sjdvAnO-uKr3wV2Hm_NIliqqWAGRME-NAxoghuMz9-c4joXSUYQ/exec';
+const LEGACY_API_PATHS=new Set([
+'https://script.google.com/macros/s/AKfycbxsXBhnitGIOqd69aSx0c7ABZpsnwrnyCGtNa-OLjiWhrVt18KaIBSs8O4nSUf-uTcitA/exec',
+'https://script.google.com/macros/s/AKfycby6e72NoImYbWFs-O9Okcj1-cAoh0BiOpnWuPOqVau-KTmmQ60tdKF32xtZrn_qhv7O/exec'
+]);
+/* The DEV frontend previously referenced an older Apps Script deployment.
+ * Keep the application code untouched and route only those DEV requests to
+ * the canonical DEV deployment already defined by the DEV service worker.
+ */
+if(!window.__ANA_FARMA_DEV_API_ROUTE__){
+ const originalFetch=window.fetch.bind(window);
+ window.fetch=async function(input,init){
+   try{
+     const raw=typeof input==='string'?input:input?.url;
+     if(raw){
+       const u=new URL(raw,location.href);
+       const path=u.origin+u.pathname;
+       if(LEGACY_API_PATHS.has(path)){
+         const target=new URL(CANONICAL_API);
+         target.search=u.search;
+         if(typeof input==='string') input=target.href;
+         else input=new Request(target.href,input);
+       }
+     }
+   }catch(_){/* preserve original fetch behavior */}
+   return originalFetch(input,init);
+ };
+ window.__ANA_FARMA_DEV_API_ROUTE__=CANONICAL_API;
+}
 const SCREENS={
  dashboard:{title:'Beranda',sub:'Ringkasan kondisi operasional apotek'},
  kasir:{title:'Transaksi',sub:'Penjualan dan pelayanan pelanggan'},
