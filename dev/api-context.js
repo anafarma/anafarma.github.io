@@ -24,6 +24,22 @@ function install(){
     return originalPost.call(this,action,p,options);
   };
   window.apiPost.__devContextWrapped=true;
+
+  // Load the V2 POS patch only after the existing DEV feature layer is ready.
+  const loadSalesV2=()=>{
+    if(window.__ANA_FARMA_SALES_V2_LOADER__)return;
+    window.__ANA_FARMA_SALES_V2_LOADER__=true;
+    const s=document.createElement('script');
+    s.src='sales-shift-v2.js?v=20260831-1';
+    s.async=true;
+    s.onerror=()=>console.warn('[Ana Farma] sales-shift-v2.js gagal dimuat.');
+    document.head.appendChild(s);
+  };
+  const waitForFeatureLayer=()=>{
+    if(window.__ANA_FARMA_FEATURE_COMPAT__||window.__ANA_FARMA_DEV_FEATURES_READY__)loadSalesV2();
+    else setTimeout(waitForFeatureLayer,50);
+  };
+  waitForFeatureLayer();
 }
 install();
 })();
